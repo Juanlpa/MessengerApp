@@ -20,6 +20,7 @@ export function useWebRTC(conversationId: string, currentUserId: string) {
 
   const peerConnection = useRef<RTCPeerConnection | null>(null);
   const localStream = useRef<MediaStream | null>(null);
+  const remoteStream = useRef<MediaStream | null>(null);
   const channel = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   // Inicializar servidor de señalización (Supabase Broadcast)
@@ -86,8 +87,17 @@ export function useWebRTC(conversationId: string, currentUserId: string) {
     };
 
     pc.ontrack = (event) => {
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
+      if (event.streams && event.streams[0]) {
+        remoteStream.current = event.streams[0];
+      } else {
+        if (!remoteStream.current) {
+          remoteStream.current = new MediaStream();
+        }
+        remoteStream.current.addTrack(event.track);
+      }
+      
+      if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== remoteStream.current) {
+        remoteVideoRef.current.srcObject = remoteStream.current;
       }
     };
 
@@ -197,7 +207,20 @@ export function useWebRTC(conversationId: string, currentUserId: string) {
     setCallState('idle');
     setIsAudioMuted(false);
     setIsVideoMuted(false);
+    remoteStream.current = null;
   }, []);
+
+  // Sincronizar el video si el componente se renderiza después del evento ontrack
+  useEffect(() => {
+    if (callState === 'connected' || callState === 'calling') {
+      if (remoteVideoRef.current && remoteStream.current && remoteVideoRef.current.srcObject !== remoteStream.current) {
+        remoteVideoRef.current.srcObject = remoteStream.current;
+      }
+      if (localVideoRef.current && localStream.current && localVideoRef.current.srcObject !== localStream.current) {
+        localVideoRef.current.srcObject = localStream.current;
+      }
+    }
+  }, [callState]);
 
   return {
     callState,
