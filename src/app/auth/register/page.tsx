@@ -107,6 +107,12 @@ export default function RegisterPage() {
           />
         </div>
 
+        {cryptoStatus && (
+          <div className="p-2 text-[#1877f2] text-sm text-center">
+            {cryptoStatus}
+          </div>
+        )}
+
         {error && (
           <div className="p-3 text-[#f02849] text-sm text-center">
             {error}
