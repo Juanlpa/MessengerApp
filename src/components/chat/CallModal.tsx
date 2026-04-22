@@ -5,8 +5,8 @@ import { CallState } from '@/hooks/useWebRTC';
 interface CallModalProps {
   callState: CallState;
   otherUsername: string;
-  localVideoRef: React.RefObject<HTMLVideoElement>;
-  remoteVideoRef: React.RefObject<HTMLVideoElement>;
+  localVideoRef: React.RefObject<HTMLVideoElement | null>;
+  remoteVideoRef: React.RefObject<HTMLVideoElement | null>;
   onAccept: () => void;
   onReject: () => void;
   onEndCall: () => void;

@@ -10,13 +10,13 @@ async function debug() {
   const supabase = createClient(url, serviceKey);
 
   const { data: users, error: uErr } = await supabase.from('users').select('id, username');
-  console.log('Users:', users);
+  console.log('Users:', users, uErr);
 
   const { data: convs, error: cErr } = await supabase.from('conversations').select('*');
-  console.log('Conversations:', convs);
+  console.log('Conversations:', convs, cErr);
 
   const { data: parts, error: pErr } = await supabase.from('conversation_participants').select('*');
-  console.log('Participants:', parts);
+  console.log('Participants:', parts, pErr);
 }
 
 debug().catch(console.error);
