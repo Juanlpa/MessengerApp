@@ -11,6 +11,14 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { signJWT, createJWTPayload } from '@/lib/auth/jwt';
 import { constantTimeEqual, fromHex } from '@/lib/crypto/utils';
 
+interface UserRow {
+  id: string;
+  email: string;
+  username: string;
+  password_hash: string;
+  dh_public_key: string;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -26,11 +34,13 @@ export async function POST(request: NextRequest) {
     const supabase = getSupabaseAdmin();
 
     // Buscar usuario por email
-    const { data: user } = await supabase
+    const { data } = await supabase
       .from('users')
       .select('id, email, username, password_hash, dh_public_key')
       .eq('email', email.toLowerCase())
       .single();
+
+    const user = data as UserRow | null;
 
     if (!user) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });

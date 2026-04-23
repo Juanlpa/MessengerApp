@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import Link from 'next/link';
+import { usePresence } from '@/hooks/usePresence';
+import { OnlineIndicator } from '@/components/chat/OnlineIndicator';
 
 interface Conversation {
   id: string;
@@ -18,6 +20,9 @@ export default function ChatPage() {
   const [searchResults, setSearchResults] = useState<Array<{ id: string; username: string; dh_public_key: string }>>([]);
   const [creating, setCreating] = useState(false);
   const { user, token } = useAuthStore();
+
+  // Presencia online/offline
+  const { isUserOnline } = usePresence(user?.id || '', user?.username || '');
 
   const loadConversations = useCallback(async () => {
     if (!token) return;
@@ -160,8 +165,11 @@ export default function ChatPage() {
                 href={`/chat/${conv.id}`}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[#f0f2f5] transition-colors mb-1"
               >
-                <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white text-lg font-medium flex-shrink-0">
-                  {conv.otherUser.username[0]?.toUpperCase() || '?'}
+                <div className="relative flex-shrink-0">
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white text-lg font-medium">
+                    {conv.otherUser.username[0]?.toUpperCase() || '?'}
+                  </div>
+                  <OnlineIndicator isOnline={isUserOnline(conv.otherUser.id)} size="md" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-[#050505] text-[15px] font-medium truncate">
@@ -203,7 +211,7 @@ export default function ChatPage() {
               <h2 className="text-[20px] font-bold text-[#050505]">Nuevo Chat</h2>
               <button
                 onClick={() => { setShowNewChat(false); setSearchResults([]); setSearchQuery(''); }}
-                className="p-1 rounded-lg hover:bg-slate-700 text-slate-400"
+                className="p-1 rounded-lg hover:bg-[#f0f2f5] text-[#65676b]"
               >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M18 6 6 18M6 6l12 12" />
@@ -251,7 +259,7 @@ export default function ChatPage() {
                 </button>
               ))}
               {searchResults.length === 0 && searchQuery.length >= 2 && (
-                <p className="text-slate-500 text-sm text-center py-4">No se encontraron usuarios</p>
+                <p className="text-[#65676b] text-sm text-center py-4">No se encontraron usuarios</p>
               )}
             </div>
           </div>

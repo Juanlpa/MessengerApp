@@ -1,11 +1,13 @@
 /**
- * Middleware — Verificación JWT para rutas protegidas
+ * Proxy (antes Middleware) — Next.js 16
+ * Verificación JWT para rutas protegidas.
  * Redirige a /auth/login si no hay token válido.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Rutas públicas — no requieren auth
@@ -16,7 +18,7 @@ export function middleware(request: NextRequest) {
 
   // Para rutas /chat — verificar que hay token en header o redirigir
   // (la verificación real del JWT se hace en los API routes)
-  // El middleware de Next.js no puede importar nuestro crypto (es edge runtime)
+  // El proxy de Next.js no puede importar nuestro crypto (es edge runtime)
   // Entonces solo verificamos que hay token en las API routes
 
   return NextResponse.next();

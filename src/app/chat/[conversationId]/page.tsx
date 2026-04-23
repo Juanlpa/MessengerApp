@@ -7,6 +7,12 @@ import Link from 'next/link';
 import { Video } from 'lucide-react';
 import { useWebRTC } from '@/hooks/useWebRTC';
 import { CallModal } from '@/components/chat/CallModal';
+import { useRealtimeMessages, useMarkAsRead } from '@/hooks/useRealtimeMessages';
+import { useTypingIndicator } from '@/hooks/useTypingIndicator';
+import { usePresence } from '@/hooks/usePresence';
+import { MessageStatus } from '@/components/chat/MessageStatus';
+import { TypingIndicator } from '@/components/chat/TypingIndicator';
+import { OnlineIndicator } from '@/components/chat/OnlineIndicator';
 
 interface Message {
   id: string;
@@ -15,6 +21,7 @@ interface Message {
   e2e?: { ciphertext: string; iv: string; mac: string } | null;
   createdAt: string;
   error?: string;
+  status?: 'sent' | 'delivered' | 'read';
 }
 
 export default function ConversationPage() {
@@ -25,11 +32,13 @@ export default function ConversationPage() {
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
   const [otherUsername, setOtherUsername] = useState('');
+  const [otherUserId, setOtherUserId] = useState('');
   const [sharedKey, setSharedKey] = useState<Uint8Array | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // WebRTC para llamadas
   const {
     callState,
     localVideoRef,
@@ -44,23 +53,72 @@ export default function ConversationPage() {
     isVideoMuted,
   } = useWebRTC(conversationId, user?.id || '');
 
-  // Cargar shared key y descifrar mensajes
+  // Presencia online/offline
+  const { isUserOnline } = usePresence(user?.id || '', user?.username || '');
+
+  // Indicador "escribiendo..."
+  const { typingText, sendTyping, stopTyping } = useTypingIndicator(
+    conversationId,
+    user?.id || '',
+    user?.username || ''
+  );
+
+  // Handler para nuevos mensajes via Realtime
+  const handleNewMessage = useCallback((msg: {
+    id: string;
+    senderId: string;
+    text: string;
+    e2e: { ciphertext: string; iv: string; mac: string } | null;
+    createdAt: string;
+  }) => {
+    setMessages(prev => {
+      // Evitar duplicados
+      if (prev.some(m => m.id === msg.id)) return prev;
+      return [...prev, { ...msg, status: 'delivered' as const }];
+    });
+  }, []);
+
+  // Handler para actualizaciones de estado de mensajes
+  const handleStatusUpdate = useCallback((messageId: string, status: string) => {
+    setMessages(prev =>
+      prev.map(m =>
+        m.id === messageId ? { ...m, status: status as 'sent' | 'delivered' | 'read' } : m
+      )
+    );
+  }, []);
+
+  // Suscripción Realtime (reemplaza polling)
+  useRealtimeMessages({
+    conversationId,
+    userId: user?.id || '',
+    token: token || '',
+    sharedKey,
+    onNewMessage: handleNewMessage,
+    onMessageStatusUpdate: handleStatusUpdate,
+  });
+
+  // Marcar mensajes como leídos cuando la conversación está abierta
+  const otherMessageIds = messages
+    .filter(m => m.senderId !== user?.id)
+    .map(m => m.id);
+  useMarkAsRead(conversationId, user?.id || '', token || '', otherMessageIds);
+
+  // Cargar shared key y mensajes iniciales
   const initConversation = useCallback(async () => {
     if (!token || !user) return;
     setLoading(true);
     try {
-      // Cargar conversaciones para obtener la shared key cifrada
       const convRes = await fetch(`/api/conversations?t=${Date.now()}`, {
         cache: 'no-store',
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!convRes.ok) throw new Error('Failed to load conversations');
       const convData = await convRes.json();
-      console.log('CONVERSATIONS LOADED:', convData, 'LOOKING FOR:', conversationId);
       const conv = convData.conversations.find((c: { id: string }) => c.id === conversationId);
       if (!conv) throw new Error('Conversation not found');
 
       setOtherUsername(conv.otherUser.username);
+      setOtherUserId(conv.otherUser.id);
 
       // Descifrar shared key
       const { decryptSharedKeyFromStorage } = await import('@/lib/crypto/key-exchange');
@@ -70,7 +128,7 @@ export default function ConversationPage() {
       const decryptedSharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKey);
       setSharedKey(decryptedSharedKey);
 
-      // Cargar mensajes
+      // Cargar mensajes iniciales
       await loadMessages(decryptedSharedKey);
     } catch (err) {
       console.error('Init conversation error:', err);
@@ -92,18 +150,17 @@ export default function ConversationPage() {
     if (!res.ok) return;
     const data = await res.json();
 
-    // Descifrar Capa 1 (E2E) de cada mensaje
     const { decryptMessageE2E } = await import('@/lib/crypto/message-crypto');
 
     const decrypted: Message[] = data.messages.map((msg: Message) => {
       if (!msg.e2e) {
-        return { ...msg, text: '[Error: datos E2E no disponibles]' };
+        return { ...msg, text: '[Error: datos E2E no disponibles]', status: 'sent' as const };
       }
       try {
         const text = decryptMessageE2E(msg.e2e, currentKey);
-        return { ...msg, text };
-      } catch (err) {
-        return { ...msg, text: '[Error al descifrar]' };
+        return { ...msg, text, status: 'delivered' as const };
+      } catch {
+        return { ...msg, text: '[Error al descifrar]', status: 'sent' as const };
       }
     });
 
@@ -114,16 +171,7 @@ export default function ConversationPage() {
     initConversation();
   }, [initConversation]);
 
-  // Polling para auto-refrescar mensajes (simulación de realtime)
-  useEffect(() => {
-    if (!sharedKey) return;
-    
-    const intervalId = setInterval(() => {
-      loadMessages(sharedKey);
-    }, 3000); // 3 segundos
-
-    return () => clearInterval(intervalId);
-  }, [sharedKey, token, conversationId]);
+  // NO más polling — ahora es Realtime
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -132,11 +180,23 @@ export default function ConversationPage() {
   const sendMessage = async () => {
     if (!newMessage.trim() || !token || !sharedKey || sending) return;
     setSending(true);
+    stopTyping(); // Quitar indicador de typing al enviar
 
     try {
-      // Cifrar Capa 1 (E2E)
       const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
       const e2eEncrypted = encryptMessageE2E(newMessage.trim(), sharedKey);
+
+      // Agregar mensaje optimistamente
+      const optimisticId = `optimistic-${Date.now()}`;
+      const optimisticMsg: Message = {
+        id: optimisticId,
+        senderId: user?.id || '',
+        text: newMessage.trim(),
+        createdAt: new Date().toISOString(),
+        status: 'sent',
+      };
+      setMessages(prev => [...prev, optimisticMsg]);
+      setNewMessage('');
 
       const res = await fetch(`/api/conversations/${conversationId}/messages`, {
         method: 'POST',
@@ -148,13 +208,37 @@ export default function ConversationPage() {
       });
 
       if (res.ok) {
-        setNewMessage('');
-        await loadMessages();
+        const data = await res.json();
+        // Reemplazar mensaje optimista con el real
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === optimisticId
+              ? { ...m, id: data.message.id, status: 'sent' as const }
+              : m
+          )
+        );
+      } else {
+        // Marcar como error
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === optimisticId
+              ? { ...m, text: `${m.text} (Error al enviar)`, error: 'send_failed' }
+              : m
+          )
+        );
       }
     } catch (err) {
       console.error('Send error:', err);
     } finally {
       setSending(false);
+    }
+  };
+
+  // Manejar input con indicador de typing
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setNewMessage(e.target.value);
+    if (e.target.value.trim()) {
+      sendTyping();
     }
   };
 
@@ -195,7 +279,7 @@ export default function ConversationPage() {
         isAudioMuted={isAudioMuted}
         isVideoMuted={isVideoMuted}
       />
-      
+
       {/* Sidebar mínima con link de vuelta */}
       <div className="w-[360px] bg-white border-r border-[#e4e6eb] flex flex-col">
         <div className="p-4 pt-5 pb-2">
@@ -213,17 +297,26 @@ export default function ConversationPage() {
       <div className="flex-1 flex flex-col bg-white">
         {/* Header de conversación */}
         <div className="px-4 py-3 bg-white border-b border-[#e4e6eb] flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white font-medium flex-shrink-0">
-            {otherUsername[0]?.toUpperCase() || '?'}
+          <div className="relative">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white font-medium flex-shrink-0">
+              {otherUsername[0]?.toUpperCase() || '?'}
+            </div>
+            <OnlineIndicator isOnline={isUserOnline(otherUserId)} size="sm" />
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[#050505] font-semibold text-[15px] truncate">{otherUsername}</p>
-            <div className="flex items-center gap-1 text-[#65676b] text-[13px] truncate">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
+            <div className="flex items-center gap-1 text-[13px] truncate">
+              {isUserOnline(otherUserId) ? (
+                <span className="text-[#31A24C]">En línea</span>
+              ) : (
+                <span className="text-[#65676b]">Desconectado</span>
+              )}
+              <span className="text-[#65676b] mx-1">·</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#65676b" strokeWidth="2" className="flex-shrink-0">
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                 <path d="M7 11V7a5 5 0 0 1 10 0v4" />
               </svg>
-              Cifrado E2E activo
+              <span className="text-[#65676b]">E2E</span>
             </div>
           </div>
           <button
@@ -233,16 +326,6 @@ export default function ConversationPage() {
           >
             <Video className="w-6 h-6" fill="currentColor" />
           </button>
-          <button
-            onClick={() => loadMessages()}
-            className="p-2 rounded-full hover:bg-[#f0f2f5] text-[#0084ff] transition-colors"
-            title="Refrescar mensajes"
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M1 4v6h6M23 20v-6h-6" />
-              <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-            </svg>
-          </button>
         </div>
 
         {/* Mensajes */}
@@ -250,10 +333,10 @@ export default function ConversationPage() {
           {messages.length === 0 && (
             <div className="text-center text-[#65676b] py-12">
               <div className="w-20 h-20 bg-[#f0f2f5] rounded-full flex items-center justify-center mx-auto mb-4">
-                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                 </svg>
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
               </div>
               <p className="text-[15px] font-medium text-[#050505]">Mensajes y llamadas cifradas de extremo a extremo</p>
               <p className="text-[13px] mt-1">Nadie fuera de este chat, ni siquiera Messenger, puede leerlos ni escucharlos.</p>
@@ -269,19 +352,37 @@ export default function ConversationPage() {
                 key={msg.id}
                 className={`flex ${isMe ? 'justify-end' : 'justify-start'} ${isLastInGroup ? 'mb-3' : 'mb-0.5'}`}
               >
-                <div
-                  className={`max-w-[75%] px-4 py-2 ${
-                    isMe
-                      ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
-                      : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
-                  }`}
-                  style={{ wordBreak: 'break-word' }}
-                >
-                  <p className="text-[15px] leading-tight">{msg.text || '[Mensaje cifrado]'}</p>
+                <div className="flex flex-col">
+                  <div
+                    className={`max-w-[75%] px-4 py-2 ${
+                      isMe
+                        ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
+                        : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
+                    }`}
+                    style={{ wordBreak: 'break-word' }}
+                  >
+                    <p className="text-[15px] leading-tight">{msg.text || '[Mensaje cifrado]'}</p>
+                  </div>
+                  {/* Status + timestamp en mensajes propios (último del grupo) */}
+                  {isMe && isLastInGroup && (
+                    <div className="flex items-center justify-end gap-1 mt-0.5 mr-1">
+                      <span className="text-[11px] text-[#65676b]">
+                        {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <MessageStatus
+                        status={msg.status || 'sent'}
+                        isOwnMessage={true}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             );
           })}
+
+          {/* Typing indicator */}
+          <TypingIndicator typingText={typingText} />
+
           <div ref={messagesEndRef} />
         </div>
 
@@ -289,28 +390,28 @@ export default function ConversationPage() {
         <div className="p-3 bg-white">
           <div className="flex items-end gap-2">
             <button className="p-2 text-[#0084ff] hover:bg-[#f0f2f5] rounded-full transition-colors flex-shrink-0">
-               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                 <line x1="12" y1="5" x2="12" y2="19"></line>
-                 <line x1="5" y1="12" x2="19" y2="12"></line>
-               </svg>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
             </button>
             <div className="flex-1 bg-[#f0f2f5] rounded-3xl flex items-center pr-2">
               <input
                 type="text"
                 value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
                 placeholder="Aa"
                 className="flex-1 px-4 py-2 bg-transparent text-[#050505] placeholder-[#65676b] focus:outline-none text-[15px]"
                 disabled={sending}
               />
               <button className="p-2 text-[#0084ff] hover:bg-[#e4e6eb] rounded-full transition-colors flex-shrink-0">
-                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                   <circle cx="12" cy="12" r="10"></circle>
-                   <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-                   <line x1="9" y1="9" x2="9.01" y2="9"></line>
-                   <line x1="15" y1="9" x2="15.01" y2="9"></line>
-                 </svg>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                  <line x1="9" y1="9" x2="9.01" y2="9" />
+                  <line x1="15" y1="9" x2="15.01" y2="9" />
+                </svg>
               </button>
             </div>
             {newMessage.trim() ? (
@@ -329,8 +430,11 @@ export default function ConversationPage() {
               </button>
             ) : (
               <button className="p-2 text-[#0084ff] hover:bg-[#f0f2f5] rounded-full transition-colors flex-shrink-0">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.6 14.08L12 11.2V6h1.5v4.5l3.8 3.5-1.1 2.08z" />
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" y1="19" x2="12" y2="23" />
+                  <line x1="8" y1="23" x2="16" y2="23" />
                 </svg>
               </button>
             )}
