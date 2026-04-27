@@ -19,7 +19,6 @@ import { AttachmentPreview } from '@/components/chat/AttachmentPreview';
 import { ImageViewer } from '@/components/chat/ImageViewer';
 import { VoiceRecordButton } from '@/components/chat/VoiceRecordButton';
 import { VoicePlayer } from '@/components/chat/VoicePlayer';
-import type { VoiceRecorderResult } from '@/hooks/useVoiceRecorder';
 
 interface Message {
   id: string;
