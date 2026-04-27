@@ -17,6 +17,9 @@ import { useAttachments } from '@/hooks/useAttachments';
 import { AttachmentButton } from '@/components/chat/AttachmentButton';
 import { AttachmentPreview } from '@/components/chat/AttachmentPreview';
 import { ImageViewer } from '@/components/chat/ImageViewer';
+import { VoiceRecordButton } from '@/components/chat/VoiceRecordButton';
+import { VoicePlayer } from '@/components/chat/VoicePlayer';
+import type { VoiceRecorderResult } from '@/hooks/useVoiceRecorder';
 
 interface Message {
   id: string;
@@ -448,8 +451,8 @@ export default function ConversationPage() {
                     }`}
                     style={{ wordBreak: 'break-word' }}
                   >
-                    {/* Attachment preview */}
-                    {hasAttachment && msg.attachment && (
+                    {/* Attachment preview (image or file) */}
+                    {hasAttachment && msg.attachment && msg.attachment.attachmentType !== 'voice' && (
                       <AttachmentPreview
                         attachmentId={msg.attachment.id}
                         filename={msg.attachment.filename}
@@ -460,6 +463,16 @@ export default function ConversationPage() {
                         onDownload={triggerDownload}
                         onViewImage={(id) => setViewerImage({ id, filename: msg.attachment!.filename })}
                         onLoadThumbnail={(id) => downloadAttachment(id, true)}
+                      />
+                    )}
+                    {/* Voice message player */}
+                    {hasAttachment && msg.attachment && msg.attachment.attachmentType === 'voice' && (
+                      <VoicePlayer
+                        attachmentId={msg.attachment.id}
+                        durationMs={msg.attachment.sizeBytes} 
+                        waveformData={[]}
+                        isOwnMessage={isMe}
+                        onLoadAudio={(id) => downloadAttachment(id, false)}
                       />
                     )}
                     {/* Text content (only if text or no attachment) */}
@@ -534,14 +547,76 @@ export default function ConversationPage() {
                 )}
               </button>
             ) : (
-              <button className="p-2 text-[#0084ff] hover:bg-[#f0f2f5] rounded-full transition-colors flex-shrink-0">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" y1="19" x2="12" y2="23" />
-                  <line x1="8" y1="23" x2="16" y2="23" />
-                </svg>
-              </button>
+              <VoiceRecordButton
+                sharedKey={sharedKey}
+                disabled={!sharedKey}
+                onVoiceReady={async (result) => {
+                  if (!token || !sharedKey) return;
+                  // Crear blob cifrado y subir como attachment de voz
+                  const hexToBytes = (hex: string) => {
+                    const bytes = new Uint8Array(hex.length / 2);
+                    for (let i = 0; i < hex.length; i += 2) bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+                    return bytes;
+                  };
+                  const encBlob = new Blob([hexToBytes(result.encryptedData.ciphertext)], { type: 'application/octet-stream' });
+
+                  const formData = new FormData();
+                  formData.append('encryptedFile', encBlob, 'voice.enc');
+                  formData.append('conversationId', conversationId);
+                  formData.append('iv', result.encryptedData.iv);
+                  formData.append('macTag', result.encryptedData.mac);
+                  formData.append('mimeType', 'audio/webm');
+                  formData.append('originalFilename', `voice_${Date.now()}.webm`);
+                  formData.append('sizeBytes', String(result.sizeBytes));
+                  formData.append('attachmentType', 'voice');
+                  formData.append('durationMs', String(result.durationMs));
+                  formData.append('waveformData', JSON.stringify(result.waveformData));
+
+                  try {
+                    const uploadRes = await fetch('/api/attachments/upload', {
+                      method: 'POST',
+                      headers: { Authorization: `Bearer ${token}` },
+                      body: formData,
+                    });
+                    if (!uploadRes.ok) throw new Error('Voice upload failed');
+                    const uploadData = await uploadRes.json();
+
+                    // Enviar mensaje tipo voice
+                    const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
+                    const content = `[voice:${uploadData.attachmentId}] Mensaje de voz`;
+                    const e2eEncrypted = encryptMessageE2E(content, sharedKey);
+
+                    const optimisticId = `optimistic-voice-${Date.now()}`;
+                    setMessages(prev => [...prev, {
+                      id: optimisticId,
+                      senderId: user?.id || '',
+                      text: 'Mensaje de voz',
+                      createdAt: new Date().toISOString(),
+                      status: 'sent' as const,
+                      messageType: 'voice' as const,
+                      attachment: {
+                        id: uploadData.attachmentId,
+                        filename: 'voice.webm',
+                        mimeType: 'audio/webm',
+                        sizeBytes: result.sizeBytes,
+                        attachmentType: 'voice' as const,
+                      },
+                    }]);
+
+                    const msgRes = await fetch(`/api/conversations/${conversationId}/messages`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                      body: JSON.stringify({ e2eEncrypted, messageType: 'voice', attachmentId: uploadData.attachmentId }),
+                    });
+                    if (msgRes.ok) {
+                      const data = await msgRes.json();
+                      setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: data.message.id } : m));
+                    }
+                  } catch (err) {
+                    console.error('Voice send error:', err);
+                  }
+                }}
+              />
             )}
           </div>
         </div>
