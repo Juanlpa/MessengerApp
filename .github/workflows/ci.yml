@@ -37,12 +37,3 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: false
 
-  # SonarCloud se habilitará en Fase 3 cuando haya código significativo
-  # sonar:
-  #   name: SonarCloud Analysis
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: SonarSource/sonarqube-scan-action@master
-  #       env:
-  #         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

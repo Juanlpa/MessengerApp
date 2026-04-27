@@ -34,8 +34,9 @@ yarn-error.log*
 .env*
 !.env.example
 
-# sonarqube
-.scannerwork
+# owasp-zap reports
+report_html.html
+zap-report.*
 
 # vercel
 .vercel
