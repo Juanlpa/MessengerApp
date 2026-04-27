@@ -28,7 +28,6 @@ import {
   decryptThumbnail,
   fileToUint8Array,
   bytesToBlobUrl,
-  MAX_FILE_SIZE,
 } from '@/lib/crypto/file-encrypt';
 import {
   validateFile,
@@ -274,7 +273,8 @@ export function useAttachments(
 function createBlobFromEncrypted(encrypted: EncryptedData): Blob {
   // El ciphertext está en hex — convertir a bytes para enviar eficientemente
   const bytes = hexToBytes(encrypted.ciphertext);
-  return new Blob([bytes], { type: 'application/octet-stream' });
+  const buffer = new Uint8Array(bytes).buffer as ArrayBuffer;
+  return new Blob([buffer], { type: 'application/octet-stream' });
 }
 
 /** Hex string → Uint8Array */

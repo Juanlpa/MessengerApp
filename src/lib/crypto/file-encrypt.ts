@@ -75,5 +75,6 @@ export async function fileToUint8Array(file: File): Promise<Uint8Array> {
 
 /** Crea Blob URL para mostrar archivo descifrado en el navegador. */
 export function bytesToBlobUrl(bytes: Uint8Array, mimeType: string): string {
-  return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+  const buffer = new Uint8Array(bytes).buffer as ArrayBuffer;
+  return URL.createObjectURL(new Blob([buffer], { type: mimeType }));
 }

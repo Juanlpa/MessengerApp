@@ -23,9 +23,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   encryptFile,
-  fileToUint8Array,
 } from '@/lib/crypto/file-encrypt';
-import { sanitizeFilename } from '@/lib/crypto/mime-validator';
 import type { EncryptedData } from '@/lib/crypto/encrypt';
 
 // ─── Types ──────────────────────────────────────────────────────────
