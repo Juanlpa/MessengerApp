@@ -37,8 +37,8 @@ describe('file-encrypt', () => {
     expect(decrypted).toEqual(original);
   });
 
-  it('should encrypt and decrypt a larger file (100 KB)', () => {
-    const original = randomBytes(100 * 1024);
+  it('should encrypt and decrypt a larger file (64 KB)', () => {
+    const original = randomBytes(64 * 1024); // 64 KB (dentro del límite de crypto.getRandomValues)
     const encrypted = encryptFile(original, validKey);
     const decrypted = decryptFile(encrypted, validKey);
     expect(decrypted).toEqual(original);

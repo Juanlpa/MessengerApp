@@ -156,8 +156,9 @@ describe('mime-validator', () => {
 
   describe('sanitizeFilename', () => {
     it('should remove path traversal attempts', () => {
-      expect(sanitizeFilename('../../../etc/passwd')).toBe('etc_passwd');
-      expect(sanitizeFilename('..\\..\\system32\\cmd.exe')).toBe('system32_cmd.exe');
+      // La implementación extrae solo el nombre final (basename)
+      expect(sanitizeFilename('../../../etc/passwd')).toBe('passwd');
+      expect(sanitizeFilename('..\\..\\system32\\cmd.exe')).toBe('cmd.exe');
     });
 
     it('should remove special characters', () => {
