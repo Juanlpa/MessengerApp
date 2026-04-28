@@ -13,6 +13,12 @@ import { usePresence } from '@/hooks/usePresence';
 import { MessageStatus } from '@/components/chat/MessageStatus';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
 import { OnlineIndicator } from '@/components/chat/OnlineIndicator';
+import { useAttachments } from '@/hooks/useAttachments';
+import { AttachmentButton } from '@/components/chat/AttachmentButton';
+import { AttachmentPreview } from '@/components/chat/AttachmentPreview';
+import { ImageViewer } from '@/components/chat/ImageViewer';
+import { VoiceRecordButton } from '@/components/chat/VoiceRecordButton';
+import { VoicePlayer } from '@/components/chat/VoicePlayer';
 
 interface Message {
   id: string;
@@ -22,6 +28,14 @@ interface Message {
   createdAt: string;
   error?: string;
   status?: 'sent' | 'delivered' | 'read';
+  messageType?: 'text' | 'image' | 'file' | 'voice';
+  attachment?: {
+    id: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    attachmentType: 'image' | 'voice' | 'file';
+  };
 }
 
 export default function ConversationPage() {
@@ -37,6 +51,7 @@ export default function ConversationPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [viewerImage, setViewerImage] = useState<{ id: string; filename: string } | null>(null);
 
   // WebRTC para llamadas
   const {
@@ -62,6 +77,77 @@ export default function ConversationPage() {
     user?.id || '',
     user?.username || ''
   );
+
+  // Hook de adjuntos cifrados
+  const {
+    uploadAttachment,
+    downloadAttachment,
+    triggerDownload,
+    uploadProgress,
+    error: attachError,
+    clearError: clearAttachError,
+  } = useAttachments(conversationId, token || '', sharedKey);
+
+  // Handler para subir archivo y enviar mensaje con referencia
+  const handleFileSelected = useCallback(async (file: File) => {
+    if (!token || !sharedKey) return null;
+
+    const result = await uploadAttachment(file);
+    if (!result) return null;
+
+    // Enviar mensaje de tipo image/file con referencia al attachment
+    try {
+      const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
+      const content = `[${result.attachmentType}:${result.id}] ${result.filename}`;
+      const e2eEncrypted = encryptMessageE2E(content, sharedKey);
+
+      const optimisticId = `optimistic-att-${Date.now()}`;
+      const optimisticMsg: Message = {
+        id: optimisticId,
+        senderId: user?.id || '',
+        text: result.filename,
+        createdAt: new Date().toISOString(),
+        status: 'sent',
+        messageType: result.attachmentType,
+        attachment: {
+          id: result.id,
+          filename: result.filename,
+          mimeType: result.mimeType,
+          sizeBytes: result.sizeBytes,
+          attachmentType: result.attachmentType,
+        },
+      };
+      setMessages(prev => [...prev, optimisticMsg]);
+
+      const res = await fetch(`/api/conversations/${conversationId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          e2eEncrypted,
+          messageType: result.attachmentType,
+          attachmentId: result.id,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === optimisticId
+              ? { ...m, id: data.message.id, status: 'sent' as const }
+              : m
+          )
+        );
+      }
+    } catch (err) {
+      console.error('Failed to send attachment message:', err);
+    }
+
+    return result;
+  }, [token, sharedKey, user?.id, conversationId, uploadAttachment]);
 
   // Handler para nuevos mensajes via Realtime
   const handleNewMessage = useCallback((msg: {
@@ -346,6 +432,7 @@ export default function ConversationPage() {
             const isMe = msg.senderId === user?.id;
             const nextMsg = messages[idx + 1];
             const isLastInGroup = !nextMsg || nextMsg.senderId !== msg.senderId;
+            const hasAttachment = msg.attachment && msg.messageType !== 'text';
 
             return (
               <div
@@ -354,14 +441,43 @@ export default function ConversationPage() {
               >
                 <div className="flex flex-col">
                   <div
-                    className={`max-w-[75%] px-4 py-2 ${
+                    className={`max-w-[75%] ${
+                      hasAttachment ? 'px-1.5 py-1.5' : 'px-4 py-2'
+                    } ${
                       isMe
                         ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
                         : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
                     }`}
                     style={{ wordBreak: 'break-word' }}
                   >
-                    <p className="text-[15px] leading-tight">{msg.text || '[Mensaje cifrado]'}</p>
+                    {/* Attachment preview (image or file) */}
+                    {hasAttachment && msg.attachment && msg.attachment.attachmentType !== 'voice' && (
+                      <AttachmentPreview
+                        attachmentId={msg.attachment.id}
+                        filename={msg.attachment.filename}
+                        mimeType={msg.attachment.mimeType}
+                        sizeBytes={msg.attachment.sizeBytes}
+                        attachmentType={msg.attachment.attachmentType}
+                        isOwnMessage={isMe}
+                        onDownload={triggerDownload}
+                        onViewImage={(id) => setViewerImage({ id, filename: msg.attachment!.filename })}
+                        onLoadThumbnail={(id) => downloadAttachment(id, true)}
+                      />
+                    )}
+                    {/* Voice message player */}
+                    {hasAttachment && msg.attachment && msg.attachment.attachmentType === 'voice' && (
+                      <VoicePlayer
+                        attachmentId={msg.attachment.id}
+                        durationMs={msg.attachment.sizeBytes} 
+                        waveformData={[]}
+                        isOwnMessage={isMe}
+                        onLoadAudio={(id) => downloadAttachment(id, false)}
+                      />
+                    )}
+                    {/* Text content (only if text or no attachment) */}
+                    {(!hasAttachment) && (
+                      <p className="text-[15px] leading-tight">{msg.text || '[Mensaje cifrado]'}</p>
+                    )}
                   </div>
                   {/* Status + timestamp en mensajes propios (último del grupo) */}
                   {isMe && isLastInGroup && (
@@ -389,12 +505,13 @@ export default function ConversationPage() {
         {/* Input de mensaje */}
         <div className="p-3 bg-white">
           <div className="flex items-end gap-2">
-            <button className="p-2 text-[#0084ff] hover:bg-[#f0f2f5] rounded-full transition-colors flex-shrink-0">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-            </button>
+            <AttachmentButton
+              onFileSelected={handleFileSelected}
+              uploadProgress={uploadProgress}
+              error={attachError}
+              onClearError={clearAttachError}
+              disabled={!sharedKey}
+            />
             <div className="flex-1 bg-[#f0f2f5] rounded-3xl flex items-center pr-2">
               <input
                 type="text"
@@ -429,18 +546,92 @@ export default function ConversationPage() {
                 )}
               </button>
             ) : (
-              <button className="p-2 text-[#0084ff] hover:bg-[#f0f2f5] rounded-full transition-colors flex-shrink-0">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" y1="19" x2="12" y2="23" />
-                  <line x1="8" y1="23" x2="16" y2="23" />
-                </svg>
-              </button>
+              <VoiceRecordButton
+                sharedKey={sharedKey}
+                disabled={!sharedKey}
+                onVoiceReady={async (result) => {
+                  if (!token || !sharedKey) return;
+                  // Crear blob cifrado y subir como attachment de voz
+                  const hexToBytes = (hex: string) => {
+                    const bytes = new Uint8Array(hex.length / 2);
+                    for (let i = 0; i < hex.length; i += 2) bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+                    return bytes;
+                  };
+                  const encBlob = new Blob([hexToBytes(result.encryptedData.ciphertext)], { type: 'application/octet-stream' });
+
+                  const formData = new FormData();
+                  formData.append('encryptedFile', encBlob, 'voice.enc');
+                  formData.append('conversationId', conversationId);
+                  formData.append('iv', result.encryptedData.iv);
+                  formData.append('macTag', result.encryptedData.mac);
+                  formData.append('mimeType', 'audio/webm');
+                  formData.append('originalFilename', `voice_${Date.now()}.webm`);
+                  formData.append('sizeBytes', String(result.sizeBytes));
+                  formData.append('attachmentType', 'voice');
+                  formData.append('durationMs', String(result.durationMs));
+                  formData.append('waveformData', JSON.stringify(result.waveformData));
+
+                  try {
+                    const uploadRes = await fetch('/api/attachments/upload', {
+                      method: 'POST',
+                      headers: { Authorization: `Bearer ${token}` },
+                      body: formData,
+                    });
+                    if (!uploadRes.ok) throw new Error('Voice upload failed');
+                    const uploadData = await uploadRes.json();
+
+                    // Enviar mensaje tipo voice
+                    const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
+                    const content = `[voice:${uploadData.attachmentId}] Mensaje de voz`;
+                    const e2eEncrypted = encryptMessageE2E(content, sharedKey);
+
+                    const optimisticId = `optimistic-voice-${Date.now()}`;
+                    setMessages(prev => [...prev, {
+                      id: optimisticId,
+                      senderId: user?.id || '',
+                      text: 'Mensaje de voz',
+                      createdAt: new Date().toISOString(),
+                      status: 'sent' as const,
+                      messageType: 'voice' as const,
+                      attachment: {
+                        id: uploadData.attachmentId,
+                        filename: 'voice.webm',
+                        mimeType: 'audio/webm',
+                        sizeBytes: result.sizeBytes,
+                        attachmentType: 'voice' as const,
+                      },
+                    }]);
+
+                    const msgRes = await fetch(`/api/conversations/${conversationId}/messages`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                      body: JSON.stringify({ e2eEncrypted, messageType: 'voice', attachmentId: uploadData.attachmentId }),
+                    });
+                    if (msgRes.ok) {
+                      const data = await msgRes.json();
+                      setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: data.message.id } : m));
+                    }
+                  } catch (err) {
+                    console.error('Voice send error:', err);
+                  }
+                }}
+              />
             )}
           </div>
         </div>
       </div>
+
+      {/* Image Viewer Modal */}
+      {viewerImage && (
+        <ImageViewer
+          isOpen={true}
+          attachmentId={viewerImage.id}
+          filename={viewerImage.filename}
+          onClose={() => setViewerImage(null)}
+          onDownload={triggerDownload}
+          onLoadFullImage={(id) => downloadAttachment(id, false)}
+        />
+      )}
     </>
   );
 }
