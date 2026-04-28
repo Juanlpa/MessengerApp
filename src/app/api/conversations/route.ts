@@ -14,13 +14,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // ?archived=true → muestra solo las archivadas; por defecto muestra las activas
+  const showArchived = request.nextUrl.searchParams.get('archived') === 'true';
+
   const supabase = getSupabaseAdmin();
 
-  // Obtener conversaciones donde el usuario es participante
+  // Obtener conversaciones donde el usuario es participante, filtradas por archivado
   const { data: participants, error } = await supabase
     .from('conversation_participants')
-    .select('conversation_id, encrypted_shared_key, shared_key_iv, shared_key_mac')
-    .eq('user_id', user.sub);
+    .select('conversation_id, encrypted_shared_key, shared_key_iv, shared_key_mac, is_archived, archived_at, muted_until')
+    .eq('user_id', user.sub)
+    .eq('is_archived', showArchived);
 
   console.log('API /conversations GET: user.sub =', user.sub, 'participants =', participants, 'error =', error);
 
@@ -65,6 +69,12 @@ export async function GET(request: NextRequest) {
           mac: p.shared_key_mac,
         },
         lastMessageAt: lastMsg?.[0]?.created_at || null,
+        // Campos de archivado y silenciado (personales por participante)
+        isArchived:  (p as any).is_archived  ?? false,
+        archivedAt:  (p as any).archived_at  ?? null,
+        // muted_until: expuesto para el sistema de push (Jade) —
+        // si muted_until > now(), suprimir notificaciones push.
+        mutedUntil:  (p as any).muted_until  ?? null,
       });
     } else {
       console.log('API /conversations GET: No other participants found for conversation', p.conversation_id);
