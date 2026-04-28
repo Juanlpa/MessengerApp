@@ -48,7 +48,17 @@ export const ChangeRoleSchema = z.object({
   role: z.enum(['admin', 'member']),
 });
 
-export type CreateGroupInput = z.infer<typeof CreateGroupSchema>;
-export type UpdateGroupInput = z.infer<typeof UpdateGroupSchema>;
-export type AddMemberInput = z.infer<typeof AddMemberSchema>;
-export type ChangeRoleInput = z.infer<typeof ChangeRoleSchema>;
+export const GroupMessageSchema = z.object({
+  e2eEncrypted: z.object({
+    ciphertext: z.string().min(1, 'ciphertext es obligatorio'),
+    iv:         z.string().min(1, 'iv es obligatorio'),
+    mac:        z.string().min(1, 'mac es obligatorio'),
+  }),
+  message_type: z.enum(['text', 'voice', 'image', 'file']).optional().default('text'),
+});
+
+export type CreateGroupInput   = z.infer<typeof CreateGroupSchema>;
+export type UpdateGroupInput   = z.infer<typeof UpdateGroupSchema>;
+export type AddMemberInput     = z.infer<typeof AddMemberSchema>;
+export type ChangeRoleInput    = z.infer<typeof ChangeRoleSchema>;
+export type GroupMessageInput  = z.infer<typeof GroupMessageSchema>;
