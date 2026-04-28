@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { getUserFromRequest } from '@/lib/auth/get-user';
 import { AddMemberSchema } from '@/lib/validation/groups-schemas';
+import { rotateOnMemberJoin } from '@/lib/groups/key-rotation';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -102,6 +103,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   if (error) {
     return NextResponse.json({ error: 'Error al agregar miembro' }, { status: 500 });
+  }
+
+  // Rotar clave del grupo: el nuevo miembro no debe poder descifrar mensajes previos
+  try {
+    await rotateOnMemberJoin(groupId);
+  } catch {
+    // No bloquear — el miembro fue agregado; la rotación puede reintentarse
   }
 
   return NextResponse.json({ success: true, user_id: newMemberId }, { status: 201 });

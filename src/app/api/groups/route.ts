@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { getUserFromRequest } from '@/lib/auth/get-user';
 import { CreateGroupSchema } from '@/lib/validation/groups-schemas';
+import { createInitialGroupKey } from '@/lib/groups/key-rotation';
 
 function extractIssues(error: { issues?: { message: string }[]; errors?: { message: string }[] }) {
   return error.issues ?? error.errors ?? [];
@@ -89,8 +90,6 @@ export async function POST(request: NextRequest) {
       user_id: id,
       role: 'member',
       added_by: user.sub,
-      // Las shared keys se distribuirán en Fase de rotación de claves (Tarea 3)
-      // Por ahora se insertan vacías — la Tarea 3 completará este flujo
       encrypted_shared_key: '',
       shared_key_iv: '',
       shared_key_mac: '',
@@ -105,6 +104,13 @@ export async function POST(request: NextRequest) {
     // Limpiar conversación huérfana
     await supabase.from('conversations').delete().eq('id', conv.id);
     return NextResponse.json({ error: 'Error al agregar miembros' }, { status: 500 });
+  }
+
+  // Crear clave simétrica inicial del grupo (Capa 2: cifrado en reposo)
+  try {
+    await createInitialGroupKey(conv.id);
+  } catch {
+    // No bloquear la creación del grupo si falla la clave — puede reintentarse
   }
 
   return NextResponse.json(
