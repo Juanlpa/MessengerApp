@@ -14,76 +14,93 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // ?archived=true → muestra solo las archivadas; por defecto muestra las activas
   const showArchived = request.nextUrl.searchParams.get('archived') === 'true';
-
   const supabase = getSupabaseAdmin();
 
-  // Obtener conversaciones donde el usuario es participante, filtradas por archivado
-  const { data: participants, error } = await supabase
+  // Query 1: registros del usuario actual
+  const { data: myParticipants, error } = await supabase
     .from('conversation_participants')
     .select('conversation_id, encrypted_shared_key, shared_key_iv, shared_key_mac, is_archived, archived_at, muted_until')
     .eq('user_id', user.sub)
     .eq('is_archived', showArchived);
 
-  console.log('API /conversations GET: user.sub =', user.sub, 'participants =', participants, 'error =', error);
+  if (error) return NextResponse.json({ error: 'Failed to load conversations' }, { status: 500 });
+  if (!myParticipants || myParticipants.length === 0) return NextResponse.json({ conversations: [] });
 
-  if (!participants || participants.length === 0) {
-    return NextResponse.json({ conversations: [] });
-  }
+  type MyParticipant = {
+    conversation_id: string;
+    encrypted_shared_key: string;
+    shared_key_iv: string;
+    shared_key_mac: string;
+    is_archived: boolean;
+    archived_at: string | null;
+    muted_until: string | null;
+  };
+  const participants = myParticipants as MyParticipant[];
+  const conversationIds = participants.map(p => p.conversation_id);
 
+  // Query 2: el otro participante de todas las conversaciones a la vez
+  const { data: otherParticipants } = await supabase
+    .from('conversation_participants')
+    .select('conversation_id, user_id')
+    .in('conversation_id', conversationIds)
+    .neq('user_id', user.sub);
 
-
-  // Obtener info de las conversaciones y el otro participante
-  const conversations = [];
-  for (const p of participants) {
-    // Buscar el otro participante
-    const { data: otherParticipants } = await supabase
-      .from('conversation_participants')
-      .select('user_id')
-      .eq('conversation_id', p.conversation_id)
-      .neq('user_id', user.sub)
-      .limit(1);
-
-    if (otherParticipants && otherParticipants.length > 0) {
-      const { data: otherUser } = await supabase
-        .from('users')
-        .select('id, username')
-        .eq('id', otherParticipants[0].user_id)
-        .single();
-
-      // Obtener último mensaje
-      const { data: lastMsg } = await supabase
-        .from('messages')
-        .select('created_at')
-        .eq('conversation_id', p.conversation_id)
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      conversations.push({
-        id: p.conversation_id,
-        otherUser: otherUser || { id: '', username: 'Unknown' },
-        encryptedSharedKey: {
-          ciphertext: p.encrypted_shared_key,
-          iv: p.shared_key_iv,
-          mac: p.shared_key_mac,
-        },
-        lastMessageAt: lastMsg?.[0]?.created_at || null,
-        // Campos de archivado y silenciado (personales por participante)
-        isArchived:  (p as any).is_archived  ?? false,
-        archivedAt:  (p as any).archived_at  ?? null,
-        // muted_until: expuesto para el sistema de push (Jade) —
-        // si muted_until > now(), suprimir notificaciones push.
-        mutedUntil:  (p as any).muted_until  ?? null,
-      });
-    } else {
-      console.log('API /conversations GET: No other participants found for conversation', p.conversation_id);
+  const otherUserIdByConv = new Map<string, string>();
+  for (const op of (otherParticipants ?? []) as Array<{ conversation_id: string; user_id: string }>) {
+    if (!otherUserIdByConv.has(op.conversation_id)) {
+      otherUserIdByConv.set(op.conversation_id, op.user_id);
     }
   }
 
-  console.log('API /conversations GET: Returning conversations', conversations.length);
+  const otherUserIds = [...new Set(otherUserIdByConv.values())];
 
-  // Ordenar por último mensaje
+  // Query 3: datos de todos los otros usuarios a la vez
+  const { data: usersData } = await supabase
+    .from('users')
+    .select('id, username')
+    .in('id', otherUserIds);
+
+  const usersById = new Map<string, { id: string; username: string }>();
+  for (const u of (usersData ?? []) as Array<{ id: string; username: string }>) usersById.set(u.id, u);
+
+  // Query 4: último mensaje por conversación (solo created_at, sin contenido cifrado)
+  const { data: messages } = await supabase
+    .from('messages')
+    .select('conversation_id, created_at')
+    .in('conversation_id', conversationIds)
+    .order('created_at', { ascending: false });
+
+  const lastMessageByConv = new Map<string, string>();
+  for (const msg of messages ?? []) {
+    if (!lastMessageByConv.has(msg.conversation_id)) {
+      lastMessageByConv.set(msg.conversation_id, msg.created_at);
+    }
+  }
+
+  // Construir respuesta
+  const conversations = [];
+  for (const p of participants) {
+    const otherUserId = otherUserIdByConv.get(p.conversation_id);
+    if (!otherUserId) continue;
+    const otherUser = usersById.get(otherUserId);
+    if (!otherUser) continue;
+
+    conversations.push({
+      id: p.conversation_id,
+      otherUser,
+      encryptedSharedKey: {
+        ciphertext: p.encrypted_shared_key,
+        iv: p.shared_key_iv,
+        mac: p.shared_key_mac,
+      },
+      lastMessageAt: lastMessageByConv.get(p.conversation_id) ?? null,
+      isArchived:  p.is_archived  ?? false,
+      archivedAt:  p.archived_at  ?? null,
+      mutedUntil:  p.muted_until  ?? null,
+    });
+  }
+
   conversations.sort((a, b) => {
     if (!a.lastMessageAt) return 1;
     if (!b.lastMessageAt) return -1;
