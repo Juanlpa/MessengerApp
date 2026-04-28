@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { getUserFromRequest } from '@/lib/auth/get-user';
+import { rotateOnMemberLeave } from '@/lib/groups/key-rotation';
 
 type RouteContext = { params: Promise<{ id: string; userId: string }> };
 
@@ -91,6 +92,13 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
 
   if (error) {
     return NextResponse.json({ error: 'Error al quitar miembro' }, { status: 500 });
+  }
+
+  // CRÍTICO: rotar clave para que el ex-miembro no pueda descifrar mensajes futuros
+  try {
+    await rotateOnMemberLeave(groupId);
+  } catch {
+    // Log implícito — el miembro ya fue eliminado; la rotación puede reintentarse
   }
 
   return NextResponse.json({ success: true });
