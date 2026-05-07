@@ -1,44 +1,25 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import Link from 'next/link';
 import { usePresence } from '@/hooks/usePresence';
 import { OnlineIndicator } from '@/components/chat/OnlineIndicator';
-
-interface Conversation {
-  id: string;
-  otherUser: { id: string; username: string };
-  encryptedSharedKey: { ciphertext: string; iv: string; mac: string };
-  lastMessageAt: string | null;
-}
+import { useConversations, isMuted } from '@/hooks/useConversations';
+import { ConversationActions } from '@/components/chat/ConversationActions';
+import { ArchivedSection } from '@/components/layout/ArchivedSection';
 
 export default function ChatPage() {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [showNewChat, setShowNewChat] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Array<{ id: string; username: string; dh_public_key: string }>>([]);
   const [creating, setCreating] = useState(false);
   const { user, token } = useAuthStore();
 
+  const { conversations, reload, archive, mute } = useConversations(false);
+
   // Presencia online/offline
   const { isUserOnline } = usePresence(user?.id || '', user?.username || '');
-
-  const loadConversations = useCallback(async () => {
-    if (!token) return;
-    const res = await fetch(`/api/conversations?t=${Date.now()}`, {
-      cache: 'no-store',
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setConversations(data.conversations);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    loadConversations();
-  }, [loadConversations]);
 
   const searchUsers = async () => {
     if (!token || searchQuery.length < 2) return;
@@ -92,7 +73,7 @@ export default function ChatPage() {
         setShowNewChat(false);
         setSearchQuery('');
         setSearchResults([]);
-        await loadConversations();
+        await reload();
         // Navegar a la conversación
         window.location.href = `/chat/${data.conversationId}`;
       }
@@ -160,35 +141,54 @@ export default function ChatPage() {
             </div>
           ) : (
             conversations.map(conv => (
-              <Link
-                key={conv.id}
-                href={`/chat/${conv.id}`}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[#f0f2f5] transition-colors mb-1"
-              >
-                <div className="relative flex-shrink-0">
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white text-lg font-medium">
-                    {conv.otherUser.username[0]?.toUpperCase() || '?'}
+              <div key={conv.id} className="group/conv relative flex items-center gap-1 mb-1">
+                <Link
+                  href={`/chat/${conv.id}`}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[#f0f2f5] transition-colors flex-1 min-w-0"
+                >
+                  <div className="relative flex-shrink-0">
+                    <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white text-lg font-medium">
+                      {conv.otherUser.username[0]?.toUpperCase() || '?'}
+                    </div>
+                    <OnlineIndicator isOnline={isUserOnline(conv.otherUser.id)} size="md" />
                   </div>
-                  <OnlineIndicator isOnline={isUserOnline(conv.otherUser.id)} size="md" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-[#050505] text-[15px] font-medium truncate">
-                    {conv.otherUser.username}
-                  </p>
-                  <p className="text-[#65676b] text-[13px] truncate">
-                    {conv.lastMessageAt
-                      ? `Último mensaje: ${new Date(conv.lastMessageAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`
-                      : 'Sin mensajes'}
-                  </p>
-                </div>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-500">
-                  <title>Cifrado E2E</title>
-                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                </svg>
-              </Link>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[#050505] text-[15px] font-medium truncate">
+                      {conv.otherUser.username}
+                    </p>
+                    <p className="text-[#65676b] text-[13px] truncate">
+                      {conv.lastMessageAt
+                        ? `Último mensaje: ${new Date(conv.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                        : 'Sin mensajes'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {isMuted(conv.mutedUntil) && (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#65676b]">
+                        <title>Silenciado</title>
+                        <line x1="2" y1="2" x2="22" y2="22" />
+                        <path d="M8.56 2.9A7 7 0 0 1 19 9v4m-2 4H3v-1l2-2V9a7 7 0 0 1 .78-3.22" />
+                        <path d="M9 17v1a3 3 0 0 0 6 0v-1" />
+                      </svg>
+                    )}
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-500">
+                      <title>Cifrado E2E</title>
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                    </svg>
+                  </div>
+                </Link>
+                <ConversationActions
+                  conversationId={conv.id}
+                  isArchived={conv.isArchived}
+                  mutedUntil={conv.mutedUntil}
+                  onArchive={archive}
+                  onMute={mute}
+                />
+              </div>
             ))
           )}
+          <ArchivedSection isUserOnline={isUserOnline} />
         </div>
       </div>
 

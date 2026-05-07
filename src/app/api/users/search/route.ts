@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { getUserFromRequest } from '@/lib/auth/get-user';
+import { sanitizeSearchQuery } from '@/lib/security/sanitize';
 
 export async function GET(request: NextRequest) {
   const user = getUserFromRequest(request);
@@ -13,8 +14,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const q = request.nextUrl.searchParams.get('q');
-  if (!q || q.length < 2) {
+  const raw = request.nextUrl.searchParams.get('q') ?? '';
+  const q = sanitizeSearchQuery(raw);
+  if (q.length < 2) {
     return NextResponse.json({ error: 'Query must be at least 2 characters' }, { status: 400 });
   }
 
@@ -23,7 +25,7 @@ export async function GET(request: NextRequest) {
     .from('users')
     .select('id, username, dh_public_key')
     .ilike('username', `%${q}%`)
-    .neq('id', user.sub) // No retornarse a sí mismo
+    .neq('id', user.sub)
     .limit(10);
 
   if (error) {

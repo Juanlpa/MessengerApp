@@ -2,8 +2,8 @@
 
 > Proyecto: Materia Seguridad en Desarrollo de Software  
 > Stack: Next.js 15 + TypeScript + Supabase + Cripto desde cero  
-> Rama activa: `develop`  
-> Última actualización: 2026-04-23
+> Rama activa: `integration/contacts-groups`  
+> Última actualización: 2026-04-27
 
 ---
 
@@ -105,18 +105,27 @@
 
 ---
 
-## FASE 5 — Gestión de contactos ⚠️ PARCIAL
+## FASE 5 — Gestión de contactos ✅ COMPLETA
 
-**Implementado:**
-- `src/app/api/users/search/route.ts` — Búsqueda de usuarios por username/email
+**Implementado (rama integration/contacts-groups):**
+- `supabase/migrations/004_create_friendships.sql` — Tabla `friendships` con RLS completo
+- `src/lib/validation/contacts-schemas.ts` — Schemas Zod (SendRequest, RespondRequest)
+- `src/app/api/contacts/request/route.ts` — POST: enviar solicitud
+- `src/app/api/contacts/[id]/respond/route.ts` — PATCH: aceptar/rechazar (solo addressee)
+- `src/app/api/contacts/route.ts` — GET: listar amigos aceptados
+- `src/app/api/contacts/pending/route.ts` — GET: solicitudes recibidas pendientes
+- `src/app/api/contacts/sent/route.ts` — GET: solicitudes enviadas
+- `src/app/api/contacts/[id]/route.ts` — DELETE: eliminar contacto
+- `src/hooks/useContacts.ts` — Hooks: useContacts, usePendingRequests, useSentRequests, useSendRequest, useRespondRequest, useDeleteContact
+- `src/components/contacts/ContactCard.tsx` — Tarjeta de contacto con avatar generado por hash
+- `src/components/contacts/PendingRequests.tsx` — Solicitudes pendientes con aceptar/rechazar
+- `src/components/contacts/SendRequestModal.tsx` — Modal de búsqueda + envío de solicitud
+- `src/components/contacts/ContactsList.tsx` — Lista de contactos con tabs (Amigos / Solicitudes)
+- Realtime: suscripción a nuevas solicitudes vía Supabase Realtime
+- `src/__tests__/api/contacts.test.ts` — 13 tests de API routes
+- `src/__tests__/rls/friendships-rls.test.ts` — 6 tests de aislamiento RLS
 
-**Pendiente:**
-- `POST /api/contacts/request` — Enviar solicitud de amistad
-- `PATCH /api/contacts/respond` — Aceptar/rechazar
-- `GET /api/contacts` — Listar amigos
-- `DELETE /api/contacts/[id]` — Eliminar contacto
-- UI: modal de búsqueda con solicitudes, lista de contactos, notificaciones
-- Requiere tabla `friendships` en BD
+**Tests:** 21/21 pasando · TypeScript: 0 errores · npm audit: 0 high/critical
 
 ---
 
