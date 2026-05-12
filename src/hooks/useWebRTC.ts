@@ -1,16 +1,50 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase/client';
+import { createClient } from '@supabase/supabase-js';
 
 export type CallState = 'idle' | 'calling' | 'receiving' | 'connected';
 
 interface SignalPayload {
-  type: 'offer' | 'answer' | 'ice-candidate' | 'hangup';
+  type: 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'reject';
   senderId: string;
-  sdp?: any;
-  candidate?: any;
+  sdp?: RTCSessionDescriptionInit;
+  candidate?: RTCIceCandidateInit;
 }
 
-export function useWebRTC(conversationId: string, currentUserId: string) {
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+];
+
+function getRealtimeClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+}
+
+export function useWebRTC(
+  conversationId: string,
+  currentUserId: string,
+  otherUserId?: string,
+  currentUsername?: string,
+  token?: string
+) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [isVideoMuted, setIsVideoMuted] = useState(false);
@@ -22,80 +56,135 @@ export function useWebRTC(conversationId: string, currentUserId: string) {
   const localStream = useRef<MediaStream | null>(null);
   const remoteStream = useRef<MediaStream | null>(null);
   const channel = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const callIdRef = useRef<string | null>(null);
+  const callStartTimeRef = useRef<number | null>(null);
+  const ringtoneRef = useRef<HTMLAudioElement | null>(null);
+  const rtcClientRef = useRef(getRealtimeClient());
 
-  // Inicializar servidor de señalización (Supabase Broadcast)
+  const stopRingtone = useCallback(() => {
+    ringtoneRef.current?.pause();
+    ringtoneRef.current = null;
+  }, []);
+
+  const playRingtone = useCallback(() => {
+    try {
+      const audio = new Audio('/ringtone.mp3');
+      audio.loop = true;
+      audio.volume = 0.5;
+      audio.play().catch(() => {});
+      ringtoneRef.current = audio;
+    } catch {}
+  }, []);
+
+  const saveCallRecord = useCallback(async (status: string, durationSecs?: number) => {
+    if (!token) return null;
+    try {
+      if (callIdRef.current) {
+        await fetch('/api/calls', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ callId: callIdRef.current, status, durationSeconds: durationSecs }),
+        });
+      } else {
+        const res = await fetch('/api/calls', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ conversationId, status }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          callIdRef.current = data.callId;
+        }
+      }
+    } catch {}
+  }, [token, conversationId]);
+
+  // Canal de señalización de la conversación
   useEffect(() => {
     if (!conversationId || !currentUserId) return;
 
-    channel.current = supabase.channel(`call_${conversationId}`);
-    
+    const rtcClient = rtcClientRef.current;
+    channel.current = rtcClient.channel(`call_${conversationId}`);
+
     channel.current
       .on('broadcast', { event: 'signal' }, async ({ payload }) => {
         const signal = payload as SignalPayload;
-        
-        // Ignorar mis propios mensajes
         if (signal.senderId === currentUserId) return;
 
         if (signal.type === 'offer') {
+          stopRingtone();
           setCallState('receiving');
-          // Guardar la oferta para cuando el usuario acepte
           peerConnection.current = createPeerConnection();
-          await peerConnection.current.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          await peerConnection.current.setRemoteDescription(new RTCSessionDescription(signal.sdp!));
         } else if (signal.type === 'answer') {
           if (peerConnection.current) {
-            await peerConnection.current.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            await peerConnection.current.setRemoteDescription(new RTCSessionDescription(signal.sdp!));
+            stopRingtone();
             setCallState('connected');
+            callStartTimeRef.current = Date.now();
+            await saveCallRecord('connected');
           }
         } else if (signal.type === 'ice-candidate') {
           if (peerConnection.current && signal.candidate) {
             await peerConnection.current.addIceCandidate(new RTCIceCandidate(signal.candidate));
           }
         } else if (signal.type === 'hangup') {
-          cleanup();
+          stopRingtone();
+          cleanup('ended');
+        } else if (signal.type === 'reject') {
+          stopRingtone();
+          cleanup('rejected');
         }
       })
       .subscribe();
 
     return () => {
-      channel.current?.unsubscribe();
-      cleanup();
+      rtcClient.removeChannel(channel.current!);
+      cleanup('ended');
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, currentUserId]);
 
-  const sendSignal = (payload: Omit<SignalPayload, 'senderId'>) => {
-    if (channel.current) {
-      channel.current.send({
-        type: 'broadcast',
-        event: 'signal',
-        payload: { ...payload, senderId: currentUserId },
-      });
-    }
-  };
-
-  const createPeerConnection = () => {
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ],
+  const sendSignal = useCallback((payload: Omit<SignalPayload, 'senderId'>) => {
+    channel.current?.send({
+      type: 'broadcast',
+      event: 'signal',
+      payload: { ...payload, senderId: currentUserId },
     });
+  }, [currentUserId]);
+
+  const notifyGlobalChannel = useCallback(async (targetUserId: string, event: string, data: object) => {
+    const rtcClient = rtcClientRef.current;
+    const globalCh = rtcClient.channel(`call_global_${targetUserId}`);
+    await new Promise<void>((resolve) => {
+      globalCh.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          globalCh.send({ type: 'broadcast', event, payload: data });
+          setTimeout(() => {
+            rtcClient.removeChannel(globalCh);
+            resolve();
+          }, 500);
+        }
+      });
+    });
+  }, []);
+
+  const createPeerConnection = useCallback(() => {
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        sendSignal({ type: 'ice-candidate', candidate: event.candidate });
+        sendSignal({ type: 'ice-candidate', candidate: event.candidate.toJSON() });
       }
     };
 
     pc.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
+      if (event.streams?.[0]) {
         remoteStream.current = event.streams[0];
       } else {
-        if (!remoteStream.current) {
-          remoteStream.current = new MediaStream();
-        }
+        if (!remoteStream.current) remoteStream.current = new MediaStream();
         remoteStream.current.addTrack(event.track);
       }
-      
       if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== remoteStream.current) {
         remoteVideoRef.current.srcObject = remoteStream.current;
       }
@@ -108,22 +197,19 @@ export function useWebRTC(conversationId: string, currentUserId: string) {
     }
 
     return pc;
-  };
+  }, [sendSignal]);
 
   const setupLocalMedia = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       localStream.current = stream;
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-      }
+      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
       return true;
-    } catch (err: any) {
-      // Evitamos console.error para que Next.js no muestre el overlay rojo en dev
-      console.warn('No se pudo acceder a la cámara/micrófono:', err.message);
-      
-      if (err.name === 'NotReadableError') {
-        alert('Tu cámara está en uso por la otra ventana o aplicación. Para probar en la misma PC con dos ventanas, apaga la cámara de la primera ventana antes de contestar en la segunda.');
+    } catch (err: unknown) {
+      const error = err as { name?: string; message?: string };
+      console.warn('No se pudo acceder a la cámara/micrófono:', error.message);
+      if (error.name === 'NotReadableError') {
+        alert('Tu cámara está en uso por otra ventana o aplicación.');
       } else {
         alert('No se pudo acceder a la cámara/micrófono. Verifica los permisos.');
       }
@@ -136,12 +222,22 @@ export function useWebRTC(conversationId: string, currentUserId: string) {
     if (!ready) return;
 
     setCallState('calling');
+    playRingtone();
     peerConnection.current = createPeerConnection();
 
     const offer = await peerConnection.current.createOffer();
     await peerConnection.current.setLocalDescription(offer);
-
     sendSignal({ type: 'offer', sdp: offer });
+
+    // Crear registro de llamada y notificar al receptor globalmente
+    await saveCallRecord('initiated');
+    if (otherUserId && currentUsername) {
+      await notifyGlobalChannel(otherUserId, 'incoming-call', {
+        conversationId,
+        callerId: currentUserId,
+        callerName: currentUsername,
+      });
+    }
   };
 
   const acceptCall = async () => {
@@ -150,67 +246,65 @@ export function useWebRTC(conversationId: string, currentUserId: string) {
       rejectCall();
       return;
     }
-
     if (!peerConnection.current) return;
 
-    // Agregar tracks locales que faltaban
     localStream.current!.getTracks().forEach((track) => {
       peerConnection.current!.addTrack(track, localStream.current!);
     });
 
     const answer = await peerConnection.current.createAnswer();
     await peerConnection.current.setLocalDescription(answer);
-
     sendSignal({ type: 'answer', sdp: answer });
     setCallState('connected');
+    callStartTimeRef.current = Date.now();
   };
 
-  const rejectCall = () => {
-    sendSignal({ type: 'hangup' });
-    cleanup();
-  };
+  const rejectCall = useCallback(() => {
+    sendSignal({ type: 'reject' });
+    cleanup('rejected');
+  }, [sendSignal]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const endCall = () => {
+  const endCall = useCallback(() => {
     sendSignal({ type: 'hangup' });
-    cleanup();
-  };
+    const duration = callStartTimeRef.current
+      ? Math.round((Date.now() - callStartTimeRef.current) / 1000)
+      : undefined;
+    cleanup('ended', duration);
+  }, [sendSignal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const cleanup = useCallback(async (status?: string, durationSecs?: number) => {
+    stopRingtone();
+    if (status && (status === 'ended' || status === 'rejected' || status === 'missed')) {
+      await saveCallRecord(status, durationSecs);
+    }
+    peerConnection.current?.close();
+    peerConnection.current = null;
+    localStream.current?.getTracks().forEach((t) => t.stop());
+    localStream.current = null;
+    remoteStream.current = null;
+    callIdRef.current = null;
+    callStartTimeRef.current = null;
+    setCallState('idle');
+    setIsAudioMuted(false);
+    setIsVideoMuted(false);
+  }, [stopRingtone, saveCallRecord]);
 
   const toggleAudio = () => {
-    if (localStream.current) {
-      const audioTrack = localStream.current.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
-        setIsAudioMuted(!audioTrack.enabled);
-      }
+    const track = localStream.current?.getAudioTracks()[0];
+    if (track) {
+      track.enabled = !track.enabled;
+      setIsAudioMuted(!track.enabled);
     }
   };
 
   const toggleVideo = () => {
-    if (localStream.current) {
-      const videoTrack = localStream.current.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled;
-        setIsVideoMuted(!videoTrack.enabled);
-      }
+    const track = localStream.current?.getVideoTracks()[0];
+    if (track) {
+      track.enabled = !track.enabled;
+      setIsVideoMuted(!track.enabled);
     }
   };
 
-  const cleanup = useCallback(() => {
-    if (peerConnection.current) {
-      peerConnection.current.close();
-      peerConnection.current = null;
-    }
-    if (localStream.current) {
-      localStream.current.getTracks().forEach((t) => t.stop());
-      localStream.current = null;
-    }
-    setCallState('idle');
-    setIsAudioMuted(false);
-    setIsVideoMuted(false);
-    remoteStream.current = null;
-  }, []);
-
-  // Sincronizar el video si el componente se renderiza después del evento ontrack
   useEffect(() => {
     if (callState === 'connected' || callState === 'calling') {
       if (remoteVideoRef.current && remoteStream.current && remoteVideoRef.current.srcObject !== remoteStream.current) {

@@ -11,7 +11,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Mic, Send, X, Lock, Loader2, ArrowUp, ArrowLeft } from 'lucide-react';
+import { Mic, Send, X, Lock, Loader2 } from 'lucide-react';
 import { useVoiceRecorder } from '@/hooks/useVoiceRecorder';
 import type { VoiceRecorderResult } from '@/hooks/useVoiceRecorder';
 
@@ -25,8 +25,9 @@ interface VoiceRecordButtonProps {
 }
 
 export function VoiceRecordButton({ sharedKey, onVoiceReady, disabled = false }: VoiceRecordButtonProps) {
-  const [sending, setSending]       = useState(false);
-  const [swipeHint, setSwipeHint]   = useState<'none' | 'lock' | 'cancel'>('none');
+  const [sending, setSending] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_swipeHint, setSwipeHint] = useState<'none' | 'lock' | 'cancel'>('none');
 
   const startPosRef  = useRef<{ x: number; y: number } | null>(null);
   const isHoldingRef = useRef(false);

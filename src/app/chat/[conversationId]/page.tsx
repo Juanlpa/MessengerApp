@@ -71,7 +71,7 @@ export default function ConversationPage() {
     toggleVideo,
     isAudioMuted,
     isVideoMuted,
-  } = useWebRTC(conversationId, user?.id || '');
+  } = useWebRTC(conversationId, user?.id || '', otherUserId || undefined, user?.username || undefined, token || undefined);
 
   // Presencia online/offline
   const { isUserOnline } = usePresence(user?.id || '', user?.username || '');
@@ -162,7 +162,7 @@ export default function ConversationPage() {
     e2e: { ciphertext: string; iv: string; mac: string } | null;
     createdAt: string;
     messageType?: string;
-    attachment?: Message['attachment'];
+    attachment?: Message['attachment'] | null;
   }) => {
     setMessages(prev => {
       if (prev.some(m => m.id === msg.id)) return prev;
