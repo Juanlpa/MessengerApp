@@ -1,6 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase/client';
 import { createClient } from '@supabase/supabase-js';
+import {
+  isInsertableStreamsSupported,
+  setupSenderTransform,
+  setupReceiverTransform,
+} from '@/lib/webrtc/insertable-streams';
 
 export type CallState = 'idle' | 'calling' | 'receiving' | 'connected';
 
@@ -43,7 +48,8 @@ export function useWebRTC(
   currentUserId: string,
   otherUserId?: string,
   currentUsername?: string,
-  token?: string
+  token?: string,
+  sharedKey?: Uint8Array | null
 ) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [isAudioMuted, setIsAudioMuted] = useState(false);
@@ -60,6 +66,8 @@ export function useWebRTC(
   const callStartTimeRef = useRef<number | null>(null);
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
   const rtcClientRef = useRef(getRealtimeClient());
+  const sharedKeyRef = useRef<Uint8Array | null | undefined>(sharedKey);
+  sharedKeyRef.current = sharedKey;
 
   const stopRingtone = useCallback(() => {
     ringtoneRef.current?.pause();
@@ -179,6 +187,11 @@ export function useWebRTC(
     };
 
     pc.ontrack = (event) => {
+      // Aplicar transform de descifrado si está soportado
+      if (sharedKeyRef.current && isInsertableStreamsSupported()) {
+        setupReceiverTransform(event.receiver, sharedKeyRef.current).catch(() => {});
+      }
+
       if (event.streams?.[0]) {
         remoteStream.current = event.streams[0];
       } else {
@@ -192,8 +205,18 @@ export function useWebRTC(
 
     if (localStream.current) {
       localStream.current.getTracks().forEach((track) => {
-        pc.addTrack(track, localStream.current!);
+        const sender = pc.addTrack(track, localStream.current!);
+        // Aplicar transform de cifrado si está soportado
+        if (sharedKeyRef.current && isInsertableStreamsSupported()) {
+          setupSenderTransform(sender, sharedKeyRef.current).catch(() => {});
+        }
       });
+    }
+
+    if (isInsertableStreamsSupported()) {
+      console.info('[WebRTC] Insertable Streams activo — cifrado E2E de media habilitado');
+    } else {
+      console.info('[WebRTC] Insertable Streams no soportado — usando SRTP estándar');
     }
 
     return pc;

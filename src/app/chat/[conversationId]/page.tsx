@@ -71,7 +71,7 @@ export default function ConversationPage() {
     toggleVideo,
     isAudioMuted,
     isVideoMuted,
-  } = useWebRTC(conversationId, user?.id || '', otherUserId || undefined, user?.username || undefined, token || undefined);
+  } = useWebRTC(conversationId, user?.id || '', otherUserId || undefined, user?.username || undefined, token || undefined, sharedKey);
 
   // Presencia online/offline
   const { isUserOnline } = usePresence(user?.id || '', user?.username || '');
