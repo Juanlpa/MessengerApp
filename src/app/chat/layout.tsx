@@ -6,9 +6,11 @@ import { useAuthStore } from '@/stores/auth-store';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { useGlobalCallListener } from '@/hooks/useGlobalCallListener';
 import { IncomingCallBanner } from '@/components/chat/IncomingCallBanner';
+import { usePushNotifications } from '@/hooks/usePushNotifications';
 
 function GlobalCallListenerWrapper({ userId, children }: { userId: string; children: React.ReactNode }) {
   useGlobalCallListener(userId);
+  usePushNotifications();
   return <>{children}</>;
 }
 

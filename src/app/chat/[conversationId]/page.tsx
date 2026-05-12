@@ -18,6 +18,8 @@ import { AttachmentPreview } from '@/components/chat/AttachmentPreview';
 import { ImageViewer } from '@/components/chat/ImageViewer';
 import { VoiceRecordButton } from '@/components/chat/VoiceRecordButton';
 import { VoicePlayer } from '@/components/chat/VoicePlayer';
+import { useGroupCall } from '@/hooks/useGroupCall';
+import { GroupCallModal } from '@/components/calls/GroupCallModal';
 
 interface Message {
   id: string;
@@ -48,6 +50,8 @@ export default function ConversationPage() {
   const [sending, setSending] = useState(false);
   const [otherUsername, setOtherUsername] = useState('');
   const [otherUserId, setOtherUserId] = useState('');
+  const [isGroup, setIsGroup] = useState(false);
+  const [groupName, setGroupName] = useState('');
   const [sharedKey, setSharedKey] = useState<Uint8Array | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -72,6 +76,19 @@ export default function ConversationPage() {
     isAudioMuted,
     isVideoMuted,
   } = useWebRTC(conversationId, user?.id || '', otherUserId || undefined, user?.username || undefined, token || undefined, sharedKey);
+
+  // Llamadas grupales
+  const {
+    callState: groupCallState,
+    participants: groupParticipants,
+    localVideoRef: groupLocalVideoRef,
+    isAudioMuted: groupAudioMuted,
+    isVideoMuted: groupVideoMuted,
+    joinCall: joinGroupCall,
+    leaveCall: leaveGroupCall,
+    toggleAudio: toggleGroupAudio,
+    toggleVideo: toggleGroupVideo,
+  } = useGroupCall(conversationId, user?.id || '', user?.username || '', sharedKey);
 
   // Presencia online/offline
   const { isUserOnline } = usePresence(user?.id || '', user?.username || '');
@@ -226,8 +243,10 @@ export default function ConversationPage() {
 
       if (!conv) throw new Error('Conversation not found');
 
-      setOtherUsername(conv.otherUser.username);
-      setOtherUserId(conv.otherUser.id);
+      setIsGroup(conv.isGroup ?? false);
+      setGroupName(conv.groupName ?? '');
+      setOtherUsername(conv.isGroup ? (conv.groupName ?? 'Grupo') : conv.otherUser.username);
+      setOtherUserId(conv.isGroup ? '' : conv.otherUser.id);
 
       // Descifrar shared key
       const { decryptSharedKeyFromStorage } = await import('@/lib/crypto/key-exchange');
@@ -388,19 +407,33 @@ export default function ConversationPage() {
 
   return (
     <>
-      <CallModal
-        callState={callState}
-        otherUsername={otherUsername}
-        localVideoRef={localVideoRef}
-        remoteVideoRef={remoteVideoRef}
-        onAccept={acceptCall}
-        onReject={rejectCall}
-        onEndCall={endCall}
-        onToggleAudio={toggleAudio}
-        onToggleVideo={toggleVideo}
-        isAudioMuted={isAudioMuted}
-        isVideoMuted={isVideoMuted}
-      />
+      {isGroup ? (
+        <GroupCallModal
+          isOpen={groupCallState === 'connected'}
+          groupName={groupName}
+          participants={groupParticipants}
+          localVideoRef={groupLocalVideoRef}
+          isAudioMuted={groupAudioMuted}
+          isVideoMuted={groupVideoMuted}
+          onToggleAudio={toggleGroupAudio}
+          onToggleVideo={toggleGroupVideo}
+          onLeave={leaveGroupCall}
+        />
+      ) : (
+        <CallModal
+          callState={callState}
+          otherUsername={otherUsername}
+          localVideoRef={localVideoRef}
+          remoteVideoRef={remoteVideoRef}
+          onAccept={acceptCall}
+          onReject={rejectCall}
+          onEndCall={endCall}
+          onToggleAudio={toggleAudio}
+          onToggleVideo={toggleVideo}
+          isAudioMuted={isAudioMuted}
+          isVideoMuted={isVideoMuted}
+        />
+      )}
 
       {/* Área de chat */}
       <div className="flex-1 flex flex-col bg-white min-w-0 overflow-hidden">
@@ -429,9 +462,9 @@ export default function ConversationPage() {
             </div>
           </div>
           <button
-            onClick={initiateCall}
+            onClick={isGroup ? joinGroupCall : initiateCall}
             className="p-2 rounded-full hover:bg-[#f0f2f5] text-[#0084ff] transition-colors"
-            title="Iniciar videollamada cifrada"
+            title={isGroup ? 'Unirse a llamada grupal' : 'Iniciar videollamada cifrada'}
           >
             <Video className="w-6 h-6" fill="currentColor" />
           </button>

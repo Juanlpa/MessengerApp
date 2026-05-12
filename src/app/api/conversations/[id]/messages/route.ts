@@ -146,9 +146,55 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: 'Failed to send message' }, { status: 500 });
     }
 
+    // Fire-and-forget push notifications to other participants
+    triggerPushForOtherParticipants(supabase, conversationId, user.sub, request).catch(() => {});
+
     return NextResponse.json({ message }, { status: 201 });
   } catch (err) {
     console.error('Send message error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
+}
+
+async function triggerPushForOtherParticipants(
+  supabase: ReturnType<typeof import('@/lib/supabase/admin').getSupabaseAdmin>,
+  conversationId: string,
+  senderId: string,
+  request: NextRequest
+) {
+  const { data: others } = await supabase
+    .from('conversation_participants')
+    .select('user_id')
+    .eq('conversation_id', conversationId)
+    .neq('user_id', senderId);
+
+  if (!others || others.length === 0) return;
+
+  const { data: senderData } = await supabase
+    .from('users')
+    .select('username')
+    .eq('id', senderId)
+    .single();
+
+  const senderName = senderData?.username || 'Alguien';
+  const baseUrl = request.nextUrl.origin;
+
+  await Promise.allSettled(
+    others.map((p: { user_id: string }) =>
+      fetch(`${baseUrl}/api/notifications/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: request.headers.get('Authorization') || '',
+        },
+        body: JSON.stringify({
+          userId: p.user_id,
+          title: senderName,
+          body: 'Nuevo mensaje',
+          conversationId,
+          type: 'message',
+        }),
+      })
+    )
+  );
 }
