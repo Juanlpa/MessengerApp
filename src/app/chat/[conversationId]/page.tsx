@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
-import Link from 'next/link';
 import { Video } from 'lucide-react';
 import { useWebRTC } from '@/hooks/useWebRTC';
 import { CallModal } from '@/components/chat/CallModal';
@@ -35,6 +34,8 @@ interface Message {
     mimeType: string;
     sizeBytes: number;
     attachmentType: 'image' | 'voice' | 'file';
+    durationMs?: number | null;
+    waveformData?: number[];
   };
 }
 
@@ -51,7 +52,11 @@ export default function ConversationPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [viewerImage, setViewerImage] = useState<{ id: string; filename: string } | null>(null);
+  const isInitialLoadRef = useRef(true);
+  const [viewerState, setViewerState] = useState<{
+    images: Array<{ id: string; filename: string }>;
+    index: number;
+  } | null>(null);
 
   // WebRTC para llamadas
   const {
@@ -156,11 +161,17 @@ export default function ConversationPage() {
     text: string;
     e2e: { ciphertext: string; iv: string; mac: string } | null;
     createdAt: string;
+    messageType?: string;
+    attachment?: Message['attachment'];
   }) => {
     setMessages(prev => {
-      // Evitar duplicados
       if (prev.some(m => m.id === msg.id)) return prev;
-      return [...prev, { ...msg, status: 'delivered' as const }];
+      return [...prev, {
+        ...msg,
+        status: 'delivered' as const,
+        messageType: (msg.messageType || 'text') as Message['messageType'],
+        attachment: msg.attachment || undefined,
+      }];
     });
   }, []);
 
@@ -200,7 +211,19 @@ export default function ConversationPage() {
       });
       if (!convRes.ok) throw new Error('Failed to load conversations');
       const convData = await convRes.json();
-      const conv = convData.conversations.find((c: { id: string }) => c.id === conversationId);
+      let conv = convData.conversations.find((c: { id: string }) => c.id === conversationId);
+
+      if (!conv) {
+        const archivedRes = await fetch(`/api/conversations?archived=true&t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (archivedRes.ok) {
+          const archivedData = await archivedRes.json();
+          conv = archivedData.conversations.find((c: { id: string }) => c.id === conversationId);
+        }
+      }
+
       if (!conv) throw new Error('Conversation not found');
 
       setOtherUsername(conv.otherUser.username);
@@ -238,13 +261,19 @@ export default function ConversationPage() {
 
     const { decryptMessageE2E } = await import('@/lib/crypto/message-crypto');
 
-    const decrypted: Message[] = data.messages.map((msg: Message) => {
+    const decrypted: Message[] = data.messages.map((msg: any) => {
       if (!msg.e2e) {
         return { ...msg, text: '[Error: datos E2E no disponibles]', status: 'sent' as const };
       }
       try {
         const text = decryptMessageE2E(msg.e2e, currentKey);
-        return { ...msg, text, status: 'delivered' as const };
+        return {
+          ...msg,
+          text,
+          status: 'delivered' as const,
+          messageType: msg.messageType || 'text',
+          attachment: msg.attachment || undefined,
+        };
       } catch {
         return { ...msg, text: '[Error al descifrar]', status: 'sent' as const };
       }
@@ -260,7 +289,15 @@ export default function ConversationPage() {
   // NO más polling — ahora es Realtime
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    isInitialLoadRef.current = true;
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (messages.length === 0) return;
+    messagesEndRef.current?.scrollIntoView({
+      behavior: isInitialLoadRef.current ? 'instant' : 'smooth',
+    });
+    isInitialLoadRef.current = false;
   }, [messages]);
 
   const sendMessage = async () => {
@@ -330,7 +367,7 @@ export default function ConversationPage() {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-white">
+      <div className="flex-1 flex items-center justify-center bg-white min-w-0">
         <div className="text-center">
           <div className="w-8 h-8 border-2 border-[#0084ff] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
           <p className="text-[#65676b] text-[15px]">Descifrando conversación...</p>
@@ -341,10 +378,9 @@ export default function ConversationPage() {
 
   if (error) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-white">
+      <div className="flex-1 flex items-center justify-center bg-white min-w-0">
         <div className="text-center text-red-500">
           <p>{error}</p>
-          <Link href="/chat" className="text-[#0084ff] text-[15px] mt-2 inline-block hover:underline">← Volver</Link>
         </div>
       </div>
     );
@@ -366,21 +402,8 @@ export default function ConversationPage() {
         isVideoMuted={isVideoMuted}
       />
 
-      {/* Sidebar mínima con link de vuelta */}
-      <div className="w-[360px] bg-white border-r border-[#e4e6eb] flex flex-col">
-        <div className="p-4 pt-5 pb-2">
-          <Link href="/chat" className="text-[#0084ff] hover:text-[#0073e6] text-[15px] flex items-center gap-1 mb-4">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M19 12H5M12 19l-7-7 7-7" />
-            </svg>
-            Volver a chats
-          </Link>
-          <h2 className="text-[#050505] text-2xl font-bold">Chats</h2>
-        </div>
-      </div>
-
       {/* Área de chat */}
-      <div className="flex-1 flex flex-col bg-white">
+      <div className="flex-1 flex flex-col bg-white min-w-0 overflow-hidden">
         {/* Header de conversación */}
         <div className="px-4 py-3 bg-white border-b border-[#e4e6eb] flex items-center gap-3">
           <div className="relative">
@@ -415,7 +438,7 @@ export default function ConversationPage() {
         </div>
 
         {/* Mensajes */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-1 bg-white">
+        <div className="flex-1 overflow-y-auto p-4 space-y-1 bg-white min-h-0">
           {messages.length === 0 && (
             <div className="text-center text-[#65676b] py-12">
               <div className="w-20 h-20 bg-[#f0f2f5] rounded-full flex items-center justify-center mx-auto mb-4">
@@ -437,11 +460,11 @@ export default function ConversationPage() {
             return (
               <div
                 key={msg.id}
-                className={`flex ${isMe ? 'justify-end' : 'justify-start'} ${isLastInGroup ? 'mb-3' : 'mb-0.5'}`}
+                className={`flex w-full ${isMe ? 'justify-end' : 'justify-start'} ${isLastInGroup ? 'mb-3' : 'mb-0.5'}`}
               >
-                <div className="flex flex-col">
+                <div className="flex flex-col max-w-[75%]">
                   <div
-                    className={`max-w-[75%] ${
+                    className={`min-w-[48px] ${
                       hasAttachment ? 'px-1.5 py-1.5' : 'px-4 py-2'
                     } ${
                       isMe
@@ -460,7 +483,13 @@ export default function ConversationPage() {
                         attachmentType={msg.attachment.attachmentType}
                         isOwnMessage={isMe}
                         onDownload={triggerDownload}
-                        onViewImage={(id) => setViewerImage({ id, filename: msg.attachment!.filename })}
+                        onViewImage={(id) => {
+                          const allImages = messages
+                            .filter(m => m.attachment?.attachmentType === 'image')
+                            .map(m => ({ id: m.attachment!.id, filename: m.attachment!.filename }));
+                          const index = allImages.findIndex(img => img.id === id);
+                          setViewerState({ images: allImages, index: Math.max(0, index) });
+                        }}
                         onLoadThumbnail={(id) => downloadAttachment(id, true)}
                       />
                     )}
@@ -468,8 +497,8 @@ export default function ConversationPage() {
                     {hasAttachment && msg.attachment && msg.attachment.attachmentType === 'voice' && (
                       <VoicePlayer
                         attachmentId={msg.attachment.id}
-                        durationMs={msg.attachment.sizeBytes} 
-                        waveformData={[]}
+                        durationMs={msg.attachment.durationMs ?? 0}
+                        waveformData={msg.attachment.waveformData ?? []}
                         isOwnMessage={isMe}
                         onLoadAudio={(id) => downloadAttachment(id, false)}
                       />
@@ -577,7 +606,11 @@ export default function ConversationPage() {
                       headers: { Authorization: `Bearer ${token}` },
                       body: formData,
                     });
-                    if (!uploadRes.ok) throw new Error('Voice upload failed');
+                    if (!uploadRes.ok) {
+                      const errBody = await uploadRes.json().catch(() => ({ error: 'unknown' }));
+                      console.error('[voice upload] Server error:', uploadRes.status, errBody);
+                      throw new Error(`Voice upload failed (${uploadRes.status}): ${errBody.error || 'unknown error'}`);
+                    }
                     const uploadData = await uploadRes.json();
 
                     // Enviar mensaje tipo voice
@@ -599,6 +632,8 @@ export default function ConversationPage() {
                         mimeType: 'audio/webm',
                         sizeBytes: result.sizeBytes,
                         attachmentType: 'voice' as const,
+                        durationMs: result.durationMs,
+                        waveformData: result.waveformData,
                       },
                     }]);
 
@@ -622,12 +657,12 @@ export default function ConversationPage() {
       </div>
 
       {/* Image Viewer Modal */}
-      {viewerImage && (
+      {viewerState && (
         <ImageViewer
           isOpen={true}
-          attachmentId={viewerImage.id}
-          filename={viewerImage.filename}
-          onClose={() => setViewerImage(null)}
+          images={viewerState.images}
+          initialIndex={viewerState.index}
+          onClose={() => setViewerState(null)}
           onDownload={triggerDownload}
           onLoadFullImage={(id) => downloadAttachment(id, false)}
         />

@@ -32,10 +32,10 @@ export async function GET(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: 'Not a participant' }, { status: 403 });
   }
 
-  // Obtener mensajes (los más recientes primero, luego invertir para mostrar en orden)
+  // Obtener mensajes con metadata de adjuntos
   const { data: messages, error } = await supabase
     .from('messages')
-    .select('id, sender_id, server_ciphertext, server_iv, server_mac_tag, ciphertext, iv, mac_tag, created_at')
+    .select('id, sender_id, server_ciphertext, server_iv, server_mac_tag, ciphertext, iv, mac_tag, created_at, message_type, attachment_id, attachment:attachments!attachment_id(id, original_filename, mime_type, size_bytes, attachment_type, duration_ms, waveform_data)')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true })
     .limit(100);
@@ -55,16 +55,26 @@ export async function GET(request: NextRequest, context: RouteContext) {
       );
       // Parsear el JSON del E2E ciphertext
       const e2eData = JSON.parse(e2eCiphertext);
+      const att = msg.attachment as any;
       return {
         id: msg.id,
         senderId: msg.sender_id,
-        // Retornar datos E2E para que el cliente descifre Capa 1
         e2e: {
           ciphertext: e2eData.ciphertext,
           iv: e2eData.iv,
           mac: e2eData.mac,
         },
         createdAt: msg.created_at,
+        messageType: msg.message_type || 'text',
+        attachment: att ? {
+          id: att.id,
+          filename: att.original_filename,
+          mimeType: att.mime_type,
+          sizeBytes: att.size_bytes,
+          attachmentType: att.attachment_type,
+          durationMs: att.duration_ms ?? null,
+          waveformData: att.waveform_data ? JSON.parse(att.waveform_data) : [],
+        } : null,
       };
     } catch (err) {
       console.error('Failed to decrypt at-rest layer for message:', msg.id, err);
@@ -102,7 +112,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   try {
     const body = await request.json();
-    const { e2eEncrypted } = body;
+    const { e2eEncrypted, messageType, attachmentId } = body;
 
     if (!e2eEncrypted || !e2eEncrypted.ciphertext || !e2eEncrypted.iv || !e2eEncrypted.mac) {
       return NextResponse.json({ error: 'Missing E2E encrypted data' }, { status: 400 });
@@ -119,14 +129,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
       .insert({
         conversation_id: conversationId,
         sender_id: user.sub,
-        // Capa 1 (E2E) — guardados como referencia pero el dato real va en Capa 2
         ciphertext: e2eEncrypted.ciphertext,
         iv: e2eEncrypted.iv,
         mac_tag: e2eEncrypted.mac,
-        // Capa 2 (at-rest)
         server_ciphertext: serverEncrypted.ciphertext,
         server_iv: serverEncrypted.iv,
         server_mac_tag: serverEncrypted.mac,
+        message_type: messageType || 'text',
+        attachment_id: attachmentId || null,
       })
       .select('id, created_at')
       .single();

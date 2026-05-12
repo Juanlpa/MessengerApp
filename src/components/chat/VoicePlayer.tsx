@@ -40,10 +40,12 @@ export function VoicePlayer({
   const [speed, setSpeed] = useState<PlaybackSpeed>(1);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationRef = useRef<number | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const audioRef       = useRef<HTMLAudioElement | null>(null);
+  const canvasRef      = useRef<HTMLCanvasElement>(null);
+  const animationRef   = useRef<number | null>(null);
+  const containerRef   = useRef<HTMLDivElement>(null);
+  const onLoadAudioRef = useRef(onLoadAudio);
+  onLoadAudioRef.current = onLoadAudio;
 
   // Colores según si es mensaje propio o recibido
   const colors = isOwnMessage
@@ -55,7 +57,7 @@ export function VoicePlayer({
     if (audioUrl) return audioUrl;
     setIsLoading(true);
     try {
-      const result = await onLoadAudio(attachmentId);
+      const result = await onLoadAudioRef.current(attachmentId);
       if (result) {
         setAudioUrl(result.blobUrl);
         return result.blobUrl;
@@ -66,7 +68,7 @@ export function VoicePlayer({
       setIsLoading(false);
     }
     return null;
-  }, [attachmentId, audioUrl, onLoadAudio]);
+  }, [attachmentId, audioUrl]);
 
   // ── Play/Pause ──────────────────────────────────────────────────
   const togglePlay = useCallback(async () => {

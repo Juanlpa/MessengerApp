@@ -4,20 +4,26 @@
  * ImageViewer.tsx — Modal fullscreen para ver imágenes descifradas
  *
  * Features:
- * - Imagen descifrada a tamaño completo
- * - Botón de descarga
- * - Zoom con scroll (wheel)
- * - Esc o click fuera para cerrar
- * - Transición suave de apertura/cierre
+ * - Navegación prev/next entre imágenes de la conversación (← →)
+ * - Contador "2 / 5"
+ * - Zoom con scroll y botones
+ * - Rotación
+ * - Descarga
+ * - Esc para cerrar, click fuera para cerrar
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { X, Download, ZoomIn, ZoomOut, RotateCw, Loader2 } from 'lucide-react';
+import { X, Download, ZoomIn, ZoomOut, RotateCw, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+
+interface ImageItem {
+  id: string;
+  filename: string;
+}
 
 interface ImageViewerProps {
   isOpen: boolean;
-  attachmentId: string;
-  filename: string;
+  images: ImageItem[];
+  initialIndex: number;
   onClose: () => void;
   onDownload: (attachmentId: string) => Promise<void>;
   onLoadFullImage: (attachmentId: string) => Promise<{ blobUrl: string } | null>;
@@ -25,86 +31,112 @@ interface ImageViewerProps {
 
 export function ImageViewer({
   isOpen,
-  attachmentId,
-  filename,
+  images,
+  initialIndex,
   onClose,
   onDownload,
   onLoadFullImage,
 }: ImageViewerProps) {
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [downloading, setDownloading] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const [rotation, setRotation] = useState(0);
-  const backdropRef = useRef<HTMLDivElement>(null);
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const [imageUrl, setImageUrl]         = useState<string | null>(null);
+  const [loading, setLoading]           = useState(true);
+  const [downloading, setDownloading]   = useState(false);
+  const [zoom, setZoom]                 = useState(1);
+  const [rotation, setRotation]         = useState(0);
 
-  // Cargar imagen completa al abrir
+  const backdropRef         = useRef<HTMLDivElement>(null);
+  const blobUrlRef          = useRef<string | null>(null);
+  const onLoadFullImageRef  = useRef(onLoadFullImage);
+  onLoadFullImageRef.current = onLoadFullImage;
+
+  const currentImage = images[currentIndex];
+  const hasPrev      = currentIndex > 0;
+  const hasNext      = currentIndex < images.length - 1;
+
+  const goPrev = useCallback(() => setCurrentIndex(i => Math.max(0, i - 1)), []);
+  const goNext = useCallback(() => setCurrentIndex(i => Math.min(images.length - 1, i + 1)), [images.length]);
+
+  // Resetear índice cuando el viewer se abre
   useEffect(() => {
-    if (!isOpen || !attachmentId) return;
+    if (isOpen) setCurrentIndex(initialIndex);
+  }, [isOpen, initialIndex]);
+
+  // Cargar imagen al cambiar de índice
+  useEffect(() => {
+    if (!isOpen || !currentImage) return;
 
     let cancelled = false;
     setLoading(true);
     setZoom(1);
     setRotation(0);
 
-    onLoadFullImage(attachmentId).then(result => {
-      if (!cancelled && result) {
-        setImageUrl(result.blobUrl);
-      }
-      if (!cancelled) setLoading(false);
-    });
+    // Revocar blob anterior
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+    setImageUrl(null);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, attachmentId, onLoadFullImage]);
+    onLoadFullImageRef.current(currentImage.id)
+      .then(result => {
+        if (!cancelled && result) {
+          blobUrlRef.current = result.blobUrl;
+          setImageUrl(result.blobUrl);
+        }
+        if (!cancelled) setLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
 
-  // Limpiar blob URL al cerrar
+    return () => { cancelled = true; };
+  }, [isOpen, currentIndex, currentImage?.id]);
+
+  // Limpiar al cerrar
   useEffect(() => {
-    if (!isOpen && imageUrl) {
-      URL.revokeObjectURL(imageUrl);
+    if (!isOpen && blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
       setImageUrl(null);
     }
-  }, [isOpen, imageUrl]);
+  }, [isOpen]);
 
-  // Cerrar con Esc
+  // Limpiar al desmontar
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+    };
+  }, []);
+
+  // Teclado: Esc cierra, ← → navegan
   useEffect(() => {
     if (!isOpen) return;
-
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape')     onClose();
+      if (e.key === 'ArrowLeft')  goPrev();
+      if (e.key === 'ArrowRight') goNext();
     };
-
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, goPrev, goNext]);
 
-  // Click fuera de la imagen para cerrar
   const handleBackdropClick = useCallback((e: React.MouseEvent) => {
-    if (e.target === backdropRef.current) {
-      onClose();
-    }
+    if (e.target === backdropRef.current) onClose();
   }, [onClose]);
 
-  // Zoom con scroll
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
-    setZoom(prev => {
-      const next = prev + (e.deltaY > 0 ? -0.1 : 0.1);
-      return Math.max(0.3, Math.min(5, next));
-    });
+    setZoom(prev => Math.max(0.3, Math.min(5, prev + (e.deltaY > 0 ? -0.1 : 0.1))));
   }, []);
 
   const handleDownload = async () => {
+    if (!currentImage) return;
     setDownloading(true);
-    try {
-      await onDownload(attachmentId);
-    } finally {
-      setDownloading(false);
-    }
+    try { await onDownload(currentImage.id); }
+    finally { setDownloading(false); }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen || !currentImage) return null;
 
   return (
     <div
@@ -116,57 +148,47 @@ export function ImageViewer({
       {/* Toolbar superior */}
       <div className="absolute top-0 left-0 right-0 flex items-center justify-between p-4 z-10 bg-gradient-to-b from-black/50 to-transparent">
         <div className="flex items-center gap-3">
-          <span className="text-white/80 text-[14px] font-medium truncate max-w-[300px]">
-            {filename}
+          <span className="text-white/80 text-[14px] font-medium truncate max-w-[200px]">
+            {currentImage.filename}
           </span>
+          {images.length > 1 && (
+            <span className="text-white/50 text-[13px] flex-shrink-0">
+              {currentIndex + 1} / {images.length}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1">
-          {/* Zoom in */}
           <button
-            onClick={() => setZoom(prev => Math.min(5, prev + 0.25))}
+            onClick={() => setZoom(p => Math.min(5, p + 0.25))}
             className="p-2 rounded-full hover:bg-white/10 text-white/70 hover:text-white transition-colors"
             title="Acercar"
           >
             <ZoomIn className="w-5 h-5" />
           </button>
-
-          {/* Zoom out */}
           <button
-            onClick={() => setZoom(prev => Math.max(0.3, prev - 0.25))}
+            onClick={() => setZoom(p => Math.max(0.3, p - 0.25))}
             className="p-2 rounded-full hover:bg-white/10 text-white/70 hover:text-white transition-colors"
             title="Alejar"
           >
             <ZoomOut className="w-5 h-5" />
           </button>
-
-          {/* Rotar */}
           <button
-            onClick={() => setRotation(prev => prev + 90)}
+            onClick={() => setRotation(p => p + 90)}
             className="p-2 rounded-full hover:bg-white/10 text-white/70 hover:text-white transition-colors"
             title="Rotar"
           >
             <RotateCw className="w-5 h-5" />
           </button>
-
-          {/* Separador */}
           <div className="w-px h-6 bg-white/20 mx-1" />
-
-          {/* Descargar */}
           <button
             onClick={handleDownload}
             disabled={downloading}
             className="p-2 rounded-full hover:bg-white/10 text-white/70 hover:text-white transition-colors"
             title="Descargar imagen"
           >
-            {downloading ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <Download className="w-5 h-5" />
-            )}
+            {downloading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
           </button>
-
-          {/* Cerrar */}
           <button
             onClick={onClose}
             className="p-2 rounded-full hover:bg-white/10 text-white/70 hover:text-white transition-colors ml-2"
@@ -176,6 +198,28 @@ export function ImageViewer({
           </button>
         </div>
       </div>
+
+      {/* Flecha anterior */}
+      {hasPrev && (
+        <button
+          onClick={goPrev}
+          className="absolute left-4 top-1/2 -translate-y-1/2 z-10 p-3 rounded-full bg-black/40 hover:bg-black/70 text-white transition-colors"
+          title="Anterior (←)"
+        >
+          <ChevronLeft className="w-6 h-6" />
+        </button>
+      )}
+
+      {/* Flecha siguiente */}
+      {hasNext && (
+        <button
+          onClick={goNext}
+          className="absolute right-4 top-1/2 -translate-y-1/2 z-10 p-3 rounded-full bg-black/40 hover:bg-black/70 text-white transition-colors"
+          title="Siguiente (→)"
+        >
+          <ChevronRight className="w-6 h-6" />
+        </button>
+      )}
 
       {/* Imagen */}
       <div className="flex items-center justify-center w-full h-full p-16">
@@ -187,11 +231,9 @@ export function ImageViewer({
         ) : imageUrl ? (
           <img
             src={imageUrl}
-            alt={filename}
+            alt={currentImage.filename}
             className="max-w-full max-h-full object-contain select-none transition-transform duration-200"
-            style={{
-              transform: `scale(${zoom}) rotate(${rotation}deg)`,
-            }}
+            style={{ transform: `scale(${zoom}) rotate(${rotation}deg)` }}
             draggable={false}
           />
         ) : (

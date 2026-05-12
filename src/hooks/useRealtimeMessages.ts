@@ -28,6 +28,16 @@ interface UseRealtimeMessagesOptions {
     text: string;
     e2e: { ciphertext: string; iv: string; mac: string } | null;
     createdAt: string;
+    messageType?: string;
+    attachment?: {
+      id: string;
+      filename: string;
+      mimeType: string;
+      sizeBytes: number;
+      attachmentType: 'image' | 'voice' | 'file';
+      durationMs?: number | null;
+      waveformData?: number[];
+    } | null;
   }) => void;
   onMessageStatusUpdate?: (messageId: string, status: string) => void;
 }
@@ -96,6 +106,8 @@ export function useRealtimeMessages({
                     text,
                     e2e: data.message.e2e,
                     createdAt: data.message.createdAt,
+                    messageType: data.message.messageType,
+                    attachment: data.message.attachment,
                   });
                 } catch {
                   onNewMessage({
