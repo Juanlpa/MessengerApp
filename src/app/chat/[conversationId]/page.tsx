@@ -1,11 +1,14 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import { Video } from 'lucide-react';
 import { useWebRTC } from '@/hooks/useWebRTC';
 import { CallModal } from '@/components/chat/CallModal';
+import { decryptSharedKeyFromStorage } from '@/lib/crypto/key-exchange';
+import { pbkdf2 } from '@/lib/crypto/pbkdf2';
+import { encryptMessageE2E, decryptMessageE2E } from '@/lib/crypto/message-crypto';
 import { useRealtimeMessages, useMarkAsRead } from '@/hooks/useRealtimeMessages';
 import { useTypingIndicator } from '@/hooks/useTypingIndicator';
 import { usePresence } from '@/hooks/usePresence';
@@ -57,6 +60,8 @@ export default function ConversationPage() {
   const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isInitialLoadRef = useRef(true);
+  // PBKDF2 es costoso — se calcula una sola vez por sesión ya que user.id no cambia
+  const storageKeyRef = useRef<Uint8Array | null>(null);
   const [viewerState, setViewerState] = useState<{
     images: Array<{ id: string; filename: string }>;
     index: number;
@@ -75,7 +80,7 @@ export default function ConversationPage() {
     toggleVideo,
     isAudioMuted,
     isVideoMuted,
-  } = useWebRTC(conversationId, user?.id || '', otherUserId || undefined, user?.username || undefined, token || undefined, sharedKey);
+  } = useWebRTC(conversationId, user?.id || '', otherUserId || undefined, user?.username || undefined, token || undefined, sharedKey, !isGroup);
 
   // Llamadas grupales
   const {
@@ -119,7 +124,6 @@ export default function ConversationPage() {
 
     // Enviar mensaje de tipo image/file con referencia al attachment
     try {
-      const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
       const content = `[${result.attachmentType}:${result.id}] ${result.filename}`;
       const e2eEncrypted = encryptMessageE2E(content, sharedKey);
 
@@ -212,9 +216,10 @@ export default function ConversationPage() {
   });
 
   // Marcar mensajes como leídos cuando la conversación está abierta
-  const otherMessageIds = messages
-    .filter(m => m.senderId !== user?.id)
-    .map(m => m.id);
+  const otherMessageIds = useMemo(
+    () => messages.filter(m => m.senderId !== user?.id).map(m => m.id),
+    [messages, user?.id]
+  );
   useMarkAsRead(conversationId, user?.id || '', token || '', otherMessageIds);
 
   // Cargar shared key y mensajes iniciales
@@ -222,38 +227,23 @@ export default function ConversationPage() {
     if (!token || !user) return;
     setLoading(true);
     try {
-      const convRes = await fetch(`/api/conversations?t=${Date.now()}`, {
+      const convRes = await fetch(`/api/conversations/${conversationId}`, {
         cache: 'no-store',
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!convRes.ok) throw new Error('Failed to load conversations');
-      const convData = await convRes.json();
-      let conv = convData.conversations.find((c: { id: string }) => c.id === conversationId);
-
-      if (!conv) {
-        const archivedRes = await fetch(`/api/conversations?archived=true&t=${Date.now()}`, {
-          cache: 'no-store',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (archivedRes.ok) {
-          const archivedData = await archivedRes.json();
-          conv = archivedData.conversations.find((c: { id: string }) => c.id === conversationId);
-        }
-      }
-
-      if (!conv) throw new Error('Conversation not found');
+      if (!convRes.ok) throw new Error('Conversation not found');
+      const { conversation: conv } = await convRes.json();
 
       setIsGroup(conv.isGroup ?? false);
       setGroupName(conv.groupName ?? '');
       setOtherUsername(conv.isGroup ? (conv.groupName ?? 'Grupo') : conv.otherUser.username);
       setOtherUserId(conv.isGroup ? '' : conv.otherUser.id);
 
-      // Descifrar shared key
-      const { decryptSharedKeyFromStorage } = await import('@/lib/crypto/key-exchange');
-      const { pbkdf2 } = await import('@/lib/crypto/pbkdf2');
-
-      const storageKey = pbkdf2(user.id, 'storage-salt', 1000, 32);
-      const decryptedSharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKey);
+      // Descifrar shared key (PBKDF2 cacheado — se computa una sola vez por sesión)
+      if (!storageKeyRef.current) {
+        storageKeyRef.current = pbkdf2(user.id, 'storage-salt', 1000, 32);
+      }
+      const decryptedSharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKeyRef.current);
       setSharedKey(decryptedSharedKey);
 
       // Cargar mensajes iniciales
@@ -277,8 +267,6 @@ export default function ConversationPage() {
 
     if (!res.ok) return;
     const data = await res.json();
-
-    const { decryptMessageE2E } = await import('@/lib/crypto/message-crypto');
 
     const decrypted: Message[] = data.messages.map((msg: any) => {
       if (!msg.e2e) {
@@ -325,7 +313,6 @@ export default function ConversationPage() {
     stopTyping(); // Quitar indicador de typing al enviar
 
     try {
-      const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
       const e2eEncrypted = encryptMessageE2E(newMessage.trim(), sharedKey);
 
       // Agregar mensaje optimistamente
@@ -443,17 +430,21 @@ export default function ConversationPage() {
             <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white font-medium flex-shrink-0">
               {otherUsername[0]?.toUpperCase() || '?'}
             </div>
-            <OnlineIndicator isOnline={isUserOnline(otherUserId)} size="sm" />
+            {!isGroup && <OnlineIndicator isOnline={isUserOnline(otherUserId)} size="sm" />}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[#050505] font-semibold text-[15px] truncate">{otherUsername}</p>
             <div className="flex items-center gap-1 text-[13px] truncate">
-              {isUserOnline(otherUserId) ? (
-                <span className="text-[#31A24C]">En línea</span>
-              ) : (
-                <span className="text-[#65676b]">Desconectado</span>
+              {!isGroup && (
+                <>
+                  {isUserOnline(otherUserId) ? (
+                    <span className="text-[#31A24C]">En línea</span>
+                  ) : (
+                    <span className="text-[#65676b]">Desconectado</span>
+                  )}
+                  <span className="text-[#65676b] mx-1">·</span>
+                </>
               )}
-              <span className="text-[#65676b] mx-1">·</span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#65676b" strokeWidth="2" className="flex-shrink-0">
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                 <path d="M7 11V7a5 5 0 0 1 10 0v4" />
@@ -647,7 +638,6 @@ export default function ConversationPage() {
                     const uploadData = await uploadRes.json();
 
                     // Enviar mensaje tipo voice
-                    const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
                     const content = `[voice:${uploadData.attachmentId}] Mensaje de voz`;
                     const e2eEncrypted = encryptMessageE2E(content, sharedKey);
 

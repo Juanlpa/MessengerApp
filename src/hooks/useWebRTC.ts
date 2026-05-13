@@ -6,6 +6,7 @@ import {
   setupSenderTransform,
   setupReceiverTransform,
 } from '@/lib/webrtc/insertable-streams';
+import { startRingtone, stopRingtone as stopRingtoneFn } from '@/lib/audio/ringtone';
 
 export type CallState = 'idle' | 'calling' | 'receiving' | 'connected';
 
@@ -49,7 +50,8 @@ export function useWebRTC(
   otherUserId?: string,
   currentUsername?: string,
   token?: string,
-  sharedKey?: Uint8Array | null
+  sharedKey?: Uint8Array | null,
+  enabled = true
 ) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [isAudioMuted, setIsAudioMuted] = useState(false);
@@ -64,25 +66,12 @@ export function useWebRTC(
   const channel = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const callIdRef = useRef<string | null>(null);
   const callStartTimeRef = useRef<number | null>(null);
-  const ringtoneRef = useRef<HTMLAudioElement | null>(null);
   const rtcClientRef = useRef(getRealtimeClient());
   const sharedKeyRef = useRef<Uint8Array | null | undefined>(sharedKey);
   sharedKeyRef.current = sharedKey;
 
-  const stopRingtone = useCallback(() => {
-    ringtoneRef.current?.pause();
-    ringtoneRef.current = null;
-  }, []);
-
-  const playRingtone = useCallback(() => {
-    try {
-      const audio = new Audio('/ringtone.mp3');
-      audio.loop = true;
-      audio.volume = 0.5;
-      audio.play().catch(() => {});
-      ringtoneRef.current = audio;
-    } catch {}
-  }, []);
+  const stopRingtone = useCallback(() => stopRingtoneFn(), []);
+  const playRingtone = useCallback(() => startRingtone(), []);
 
   const saveCallRecord = useCallback(async (status: string, durationSecs?: number) => {
     if (!token) return null;
@@ -109,7 +98,7 @@ export function useWebRTC(
 
   // Canal de señalización de la conversación
   useEffect(() => {
-    if (!conversationId || !currentUserId) return;
+    if (!conversationId || !currentUserId || !enabled) return;
 
     const rtcClient = rtcClientRef.current;
     channel.current = rtcClient.channel(`call_${conversationId}`);
@@ -151,7 +140,7 @@ export function useWebRTC(
       cleanup('ended');
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationId, currentUserId]);
+  }, [conversationId, currentUserId, enabled]);
 
   const sendSignal = useCallback((payload: Omit<SignalPayload, 'senderId'>) => {
     channel.current?.send({
@@ -272,7 +261,10 @@ export function useWebRTC(
     if (!peerConnection.current) return;
 
     localStream.current!.getTracks().forEach((track) => {
-      peerConnection.current!.addTrack(track, localStream.current!);
+      const sender = peerConnection.current!.addTrack(track, localStream.current!);
+      if (sharedKeyRef.current && isInsertableStreamsSupported()) {
+        setupSenderTransform(sender, sharedKeyRef.current).catch(() => {});
+      }
     });
 
     const answer = await peerConnection.current.createAnswer();
@@ -305,6 +297,8 @@ export function useWebRTC(
     localStream.current?.getTracks().forEach((t) => t.stop());
     localStream.current = null;
     remoteStream.current = null;
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     callIdRef.current = null;
     callStartTimeRef.current = null;
     setCallState('idle');

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { MeshManager, MeshParticipant } from '@/lib/webrtc/mesh-manager';
 
 export type GroupCallState = 'idle' | 'connected';
@@ -47,6 +47,7 @@ export function useGroupCall(
     managerRef.current?.leave();
     managerRef.current = null;
     localStreamRef.current = null;
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
     setCallState('idle');
     setParticipants(new Map());
     setIsAudioMuted(false);
@@ -69,6 +70,20 @@ export function useGroupCall(
       track.enabled = !track.enabled;
       setIsVideoMuted(!track.enabled);
     }
+  }, []);
+
+  // Cleanup al desmontar el componente para liberar cámara/mic y canal Supabase
+  useEffect(() => {
+    return () => {
+      if (managerRef.current) {
+        managerRef.current.leave();
+        managerRef.current = null;
+      }
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((t) => t.stop());
+        localStreamRef.current = null;
+      }
+    };
   }, []);
 
   return {

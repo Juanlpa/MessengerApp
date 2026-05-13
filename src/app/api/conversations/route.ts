@@ -140,23 +140,22 @@ export async function POST(request: NextRequest) {
 
     const supabase = getSupabaseAdmin();
 
-    // Verificar que no existe ya una conversación entre estos dos usuarios
-    const { data: existingParticipants } = await supabase
+    // Verificar que no existe ya una conversación entre estos dos usuarios (2 queries en lugar de N+1)
+    const { data: myConvs } = await supabase
       .from('conversation_participants')
       .select('conversation_id')
       .eq('user_id', user.sub);
 
-    if (existingParticipants) {
-      for (const ep of existingParticipants) {
-        const { data: otherInConv } = await supabase
-          .from('conversation_participants')
-          .select('user_id')
-          .eq('conversation_id', ep.conversation_id)
-          .eq('user_id', otherUserId)
-          .limit(1);
-        if (otherInConv && otherInConv.length > 0) {
-          return NextResponse.json({ conversationId: ep.conversation_id });
-        }
+    if (myConvs && myConvs.length > 0) {
+      const myConvIds = myConvs.map((c: { conversation_id: string }) => c.conversation_id);
+      const { data: shared } = await supabase
+        .from('conversation_participants')
+        .select('conversation_id')
+        .eq('user_id', otherUserId)
+        .in('conversation_id', myConvIds)
+        .limit(1);
+      if (shared && shared.length > 0) {
+        return NextResponse.json({ conversationId: shared[0].conversation_id });
       }
     }
 

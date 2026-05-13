@@ -5,8 +5,7 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: body || 'Nuevo mensaje',
-    icon: '/icon.png',
-    badge: '/icon.png',
+    icon: '/favicon.ico',
     tag: conversationId,
     renotify: type === 'call',
     data: { conversationId, type },

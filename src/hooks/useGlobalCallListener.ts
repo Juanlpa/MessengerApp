@@ -22,6 +22,10 @@ export function useGlobalCallListener(userId: string) {
 
     channel
       .on('broadcast', { event: 'incoming-call' }, ({ payload }) => {
+        // Si el usuario ya está en esa conversación, el CallModal la maneja directamente
+        const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
+        if (currentPath.includes(payload.conversationId)) return;
+
         setIncomingCall({
           conversationId: payload.conversationId,
           callerId: payload.callerId,

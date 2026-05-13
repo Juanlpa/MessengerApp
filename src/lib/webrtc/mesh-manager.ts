@@ -7,7 +7,7 @@
  * Mensajes de señalización:
  *   join       { userId, username }
  *   leave      { userId }
- *   offer      { from, to, sdp }
+ *   offer      { from, to, sdp, username }
  *   answer     { from, to, sdp }
  *   ice        { from, to, candidate }
  */
@@ -46,6 +46,7 @@ export class MeshManager {
   private localStream: MediaStream | null = null;
   private sharedKey: Uint8Array | null = null;
   private analyserNodes = new Map<string, AnalyserNode>();
+  private audioContexts = new Map<string, AudioContext>();
   private speakingInterval: ReturnType<typeof setInterval> | null = null;
   private onParticipantsChange: OnParticipantsChange;
   private supabase;
@@ -108,10 +109,10 @@ export class MeshManager {
         this.removePeer(userId);
       })
       .on('broadcast', { event: 'offer' }, async ({ payload }) => {
-        const { from, to, sdp } = payload as { from: string; to: string; sdp: RTCSessionDescriptionInit };
+        const { from, to, sdp, username } = payload as { from: string; to: string; sdp: RTCSessionDescriptionInit; username?: string };
         if (to !== this.userId) return;
 
-        this.addParticipant(from, '');
+        this.addParticipant(from, username || '');
         const pc = this.getOrCreatePeer(from);
         await pc.setRemoteDescription(new RTCSessionDescription(sdp));
         const answer = await pc.createAnswer();
@@ -195,7 +196,7 @@ export class MeshManager {
     const pc = this.getOrCreatePeer(peerId);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    this.send('offer', { from: this.userId, to: peerId, sdp: offer });
+    this.send('offer', { from: this.userId, to: peerId, sdp: offer, username: this.username });
   }
 
   private removePeer(peerId: string) {
@@ -203,6 +204,8 @@ export class MeshManager {
     this.peers.delete(peerId);
     this.participants.delete(peerId);
     this.analyserNodes.delete(peerId);
+    this.audioContexts.get(peerId)?.close().catch(() => {});
+    this.audioContexts.delete(peerId);
     this.notify();
   }
 
@@ -214,6 +217,7 @@ export class MeshManager {
       analyser.fftSize = 256;
       source.connect(analyser);
       this.analyserNodes.set(userId, analyser);
+      this.audioContexts.set(userId, ctx);
     } catch {}
   }
 
@@ -244,6 +248,8 @@ export class MeshManager {
     this.peers.clear();
     this.participants.clear();
     this.analyserNodes.clear();
+    this.audioContexts.forEach((ctx) => ctx.close().catch(() => {}));
+    this.audioContexts.clear();
     if (this.channel) this.supabase.removeChannel(this.channel);
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
