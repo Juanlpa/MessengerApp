@@ -1,12 +1,15 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
-import { Video } from 'lucide-react';
+import { Video, Phone, Users } from 'lucide-react';
 import { useWebRTC } from '@/hooks/useWebRTC';
 import { CallModal } from '@/components/chat/CallModal';
-import { useRealtimeMessages, useMarkAsRead } from '@/hooks/useRealtimeMessages';
+import { decryptSharedKeyFromStorage } from '@/lib/crypto/key-exchange';
+import { pbkdf2 } from '@/lib/crypto/pbkdf2';
+import { encryptMessageE2E, decryptMessageE2E } from '@/lib/crypto/message-crypto';
+import { useRealtimeMessages, useMarkAsRead, type BroadcastPayload } from '@/hooks/useRealtimeMessages';
 import { useTypingIndicator } from '@/hooks/useTypingIndicator';
 import { usePresence } from '@/hooks/usePresence';
 import { MessageStatus } from '@/components/chat/MessageStatus';
@@ -18,6 +21,10 @@ import { AttachmentPreview } from '@/components/chat/AttachmentPreview';
 import { ImageViewer } from '@/components/chat/ImageViewer';
 import { VoiceRecordButton } from '@/components/chat/VoiceRecordButton';
 import { VoicePlayer } from '@/components/chat/VoicePlayer';
+import { useGroupCall } from '@/hooks/useGroupCall';
+import { GroupCallModal } from '@/components/calls/GroupCallModal';
+
+const MAX_MESSAGES_IN_MEMORY = 500;
 
 interface Message {
   id: string;
@@ -48,17 +55,36 @@ export default function ConversationPage() {
   const [sending, setSending] = useState(false);
   const [otherUsername, setOtherUsername] = useState('');
   const [otherUserId, setOtherUserId] = useState('');
+  const [isGroup, setIsGroup] = useState(false);
+  const [groupName, setGroupName] = useState('');
   const [sharedKey, setSharedKey] = useState<Uint8Array | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isInitialLoadRef = useRef(true);
+  // PBKDF2 es costoso — se calcula una sola vez por sesión ya que user.id no cambia
+  const storageKeyRef = useRef<Uint8Array | null>(null);
+  // Ref estable para broadcastMessage — permite cerrar sobre él antes de que el hook lo declare
+  const broadcastMessageRef = useRef<((payload: BroadcastPayload) => void)>(() => {});
   const [viewerState, setViewerState] = useState<{
     images: Array<{ id: string; filename: string }>;
     index: number;
   } | null>(null);
 
-  // WebRTC para llamadas
+  // Llamadas grupales — se define antes para pasarlo como callback a useWebRTC
+  const {
+    callState: groupCallState,
+    participants: groupParticipants,
+    localVideoRef: groupLocalVideoRef,
+    isAudioMuted: groupAudioMuted,
+    isVideoMuted: groupVideoMuted,
+    joinCall: joinGroupCall,
+    leaveCall: leaveGroupCall,
+    toggleAudio: toggleGroupAudio,
+    toggleVideo: toggleGroupVideo,
+  } = useGroupCall(conversationId, user?.id || '', user?.username || '', sharedKey);
+
+  // WebRTC para llamadas 1-a-1
   const {
     callState,
     localVideoRef,
@@ -67,14 +93,27 @@ export default function ConversationPage() {
     acceptCall,
     rejectCall,
     endCall,
+    inviteToCall,
     toggleAudio,
     toggleVideo,
     isAudioMuted,
     isVideoMuted,
-  } = useWebRTC(conversationId, user?.id || '');
+    isAudioOnly,
+    isE2EMedia,
+  } = useWebRTC(
+    conversationId,
+    user?.id || '',
+    otherUserId || undefined,
+    user?.username || undefined,
+    token || undefined,
+    sharedKey,
+    !isGroup,
+    joinGroupCall  // onUpgradeToGroup: cuando el otro lado añade un tercero, unirse al grupo
+  );
 
   // Presencia online/offline
   const { isUserOnline } = usePresence(user?.id || '', user?.username || '');
+  const otherUserOnline = useMemo<boolean>(() => isUserOnline(otherUserId), [isUserOnline, otherUserId]);
 
   // Indicador "escribiendo..."
   const { typingText, sendTyping, stopTyping } = useTypingIndicator(
@@ -93,6 +132,12 @@ export default function ConversationPage() {
     clearError: clearAttachError,
   } = useAttachments(conversationId, token || '', sharedKey);
 
+  // Añadir participante a llamada 1-a-1 → convierte a llamada grupal
+  const handleAddParticipant = useCallback(async (contactId: string, contactName: string) => {
+    await inviteToCall(contactId, contactName);
+    await joinGroupCall();
+  }, [inviteToCall, joinGroupCall]);
+
   // Handler para subir archivo y enviar mensaje con referencia
   const handleFileSelected = useCallback(async (file: File) => {
     if (!token || !sharedKey) return null;
@@ -102,7 +147,6 @@ export default function ConversationPage() {
 
     // Enviar mensaje de tipo image/file con referencia al attachment
     try {
-      const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
       const content = `[${result.attachmentType}:${result.id}] ${result.filename}`;
       const e2eEncrypted = encryptMessageE2E(content, sharedKey);
 
@@ -146,6 +190,20 @@ export default function ConversationPage() {
               : m
           )
         );
+        broadcastMessageRef.current({
+          id: data.message.id,
+          senderId: user?.id || '',
+          e2e: e2eEncrypted,
+          createdAt: data.message.created_at ?? new Date().toISOString(),
+          messageType: result.attachmentType,
+          attachment: {
+            id: result.id,
+            filename: result.filename,
+            mimeType: result.mimeType,
+            sizeBytes: result.sizeBytes,
+            attachmentType: result.attachmentType,
+          },
+        });
       }
     } catch (err) {
       console.error('Failed to send attachment message:', err);
@@ -162,16 +220,17 @@ export default function ConversationPage() {
     e2e: { ciphertext: string; iv: string; mac: string } | null;
     createdAt: string;
     messageType?: string;
-    attachment?: Message['attachment'];
+    attachment?: Message['attachment'] | null;
   }) => {
     setMessages(prev => {
       if (prev.some(m => m.id === msg.id)) return prev;
-      return [...prev, {
+      const next = [...prev, {
         ...msg,
         status: 'delivered' as const,
         messageType: (msg.messageType || 'text') as Message['messageType'],
         attachment: msg.attachment || undefined,
       }];
+      return next.length > MAX_MESSAGES_IN_MEMORY ? next.slice(-MAX_MESSAGES_IN_MEMORY) : next;
     });
   }, []);
 
@@ -184,8 +243,8 @@ export default function ConversationPage() {
     );
   }, []);
 
-  // Suscripción Realtime (reemplaza polling)
-  useRealtimeMessages({
+  // Suscripción Realtime (Broadcast — no depende de RLS de Supabase Auth)
+  const { broadcastMessage } = useRealtimeMessages({
     conversationId,
     userId: user?.id || '',
     token: token || '',
@@ -193,11 +252,13 @@ export default function ConversationPage() {
     onNewMessage: handleNewMessage,
     onMessageStatusUpdate: handleStatusUpdate,
   });
+  broadcastMessageRef.current = broadcastMessage;
 
   // Marcar mensajes como leídos cuando la conversación está abierta
-  const otherMessageIds = messages
-    .filter(m => m.senderId !== user?.id)
-    .map(m => m.id);
+  const otherMessageIds = useMemo(
+    () => messages.filter(m => m.senderId !== user?.id).map(m => m.id),
+    [messages, user?.id]
+  );
   useMarkAsRead(conversationId, user?.id || '', token || '', otherMessageIds);
 
   // Cargar shared key y mensajes iniciales
@@ -205,36 +266,23 @@ export default function ConversationPage() {
     if (!token || !user) return;
     setLoading(true);
     try {
-      const convRes = await fetch(`/api/conversations?t=${Date.now()}`, {
+      const convRes = await fetch(`/api/conversations/${conversationId}`, {
         cache: 'no-store',
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!convRes.ok) throw new Error('Failed to load conversations');
-      const convData = await convRes.json();
-      let conv = convData.conversations.find((c: { id: string }) => c.id === conversationId);
+      if (!convRes.ok) throw new Error('Conversation not found');
+      const { conversation: conv } = await convRes.json();
 
-      if (!conv) {
-        const archivedRes = await fetch(`/api/conversations?archived=true&t=${Date.now()}`, {
-          cache: 'no-store',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (archivedRes.ok) {
-          const archivedData = await archivedRes.json();
-          conv = archivedData.conversations.find((c: { id: string }) => c.id === conversationId);
-        }
+      setIsGroup(conv.isGroup ?? false);
+      setGroupName(conv.groupName ?? '');
+      setOtherUsername(conv.isGroup ? (conv.groupName ?? 'Grupo') : conv.otherUser.username);
+      setOtherUserId(conv.isGroup ? '' : conv.otherUser.id);
+
+      // Descifrar shared key (PBKDF2 cacheado — se computa una sola vez por sesión)
+      if (!storageKeyRef.current) {
+        storageKeyRef.current = pbkdf2(user.id, 'storage-salt', 1000, 32);
       }
-
-      if (!conv) throw new Error('Conversation not found');
-
-      setOtherUsername(conv.otherUser.username);
-      setOtherUserId(conv.otherUser.id);
-
-      // Descifrar shared key
-      const { decryptSharedKeyFromStorage } = await import('@/lib/crypto/key-exchange');
-      const { pbkdf2 } = await import('@/lib/crypto/pbkdf2');
-
-      const storageKey = pbkdf2(user.id, 'storage-salt', 1000, 32);
-      const decryptedSharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKey);
+      const decryptedSharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKeyRef.current);
       setSharedKey(decryptedSharedKey);
 
       // Cargar mensajes iniciales
@@ -258,8 +306,6 @@ export default function ConversationPage() {
 
     if (!res.ok) return;
     const data = await res.json();
-
-    const { decryptMessageE2E } = await import('@/lib/crypto/message-crypto');
 
     const decrypted: Message[] = data.messages.map((msg: any) => {
       if (!msg.e2e) {
@@ -300,13 +346,17 @@ export default function ConversationPage() {
     isInitialLoadRef.current = false;
   }, [messages]);
 
+  useEffect(() => {
+    if (!typingText) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [typingText]);
+
   const sendMessage = async () => {
     if (!newMessage.trim() || !token || !sharedKey || sending) return;
     setSending(true);
     stopTyping(); // Quitar indicador de typing al enviar
 
     try {
-      const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
       const e2eEncrypted = encryptMessageE2E(newMessage.trim(), sharedKey);
 
       // Agregar mensaje optimistamente
@@ -332,7 +382,6 @@ export default function ConversationPage() {
 
       if (res.ok) {
         const data = await res.json();
-        // Reemplazar mensaje optimista con el real
         setMessages(prev =>
           prev.map(m =>
             m.id === optimisticId
@@ -340,6 +389,14 @@ export default function ConversationPage() {
               : m
           )
         );
+        broadcastMessage({
+          id: data.message.id,
+          senderId: user?.id || '',
+          e2e: e2eEncrypted,
+          createdAt: data.message.created_at ?? new Date().toISOString(),
+          messageType: 'text',
+          attachment: null,
+        });
       } else {
         // Marcar como error
         setMessages(prev =>
@@ -365,6 +422,13 @@ export default function ConversationPage() {
     }
   };
 
+  const imageGallery = useMemo(
+    () => messages
+      .filter(m => m.attachment?.attachmentType === 'image')
+      .map(m => ({ id: m.attachment!.id, filename: m.attachment!.filename })),
+    [messages]
+  );
+
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center bg-white min-w-0">
@@ -388,19 +452,38 @@ export default function ConversationPage() {
 
   return (
     <>
-      <CallModal
-        callState={callState}
-        otherUsername={otherUsername}
-        localVideoRef={localVideoRef}
-        remoteVideoRef={remoteVideoRef}
-        onAccept={acceptCall}
-        onReject={rejectCall}
-        onEndCall={endCall}
-        onToggleAudio={toggleAudio}
-        onToggleVideo={toggleVideo}
-        isAudioMuted={isAudioMuted}
-        isVideoMuted={isVideoMuted}
-      />
+      {/* GroupCallModal se muestra en grupos nativos Y en llamadas 1-a-1 upgradeadas a grupo */}
+      {(isGroup || groupCallState === 'connected') ? (
+        <GroupCallModal
+          isOpen={groupCallState === 'connected'}
+          groupName={groupName}
+          participants={groupParticipants}
+          localVideoRef={groupLocalVideoRef}
+          isAudioMuted={groupAudioMuted}
+          isVideoMuted={groupVideoMuted}
+          onToggleAudio={toggleGroupAudio}
+          onToggleVideo={toggleGroupVideo}
+          onLeave={leaveGroupCall}
+        />
+      ) : (
+        <CallModal
+          callState={callState}
+          otherUsername={otherUsername}
+          localVideoRef={localVideoRef}
+          remoteVideoRef={remoteVideoRef}
+          onAccept={acceptCall}
+          onReject={rejectCall}
+          onEndCall={endCall}
+          onToggleAudio={toggleAudio}
+          onToggleVideo={toggleVideo}
+          isAudioMuted={isAudioMuted}
+          isVideoMuted={isVideoMuted}
+          isAudioOnly={isAudioOnly}
+          isE2EMedia={isE2EMedia}
+          token={token || undefined}
+          onAddParticipant={handleAddParticipant}
+        />
+      )}
 
       {/* Área de chat */}
       <div className="flex-1 flex flex-col bg-white min-w-0 overflow-hidden">
@@ -410,17 +493,21 @@ export default function ConversationPage() {
             <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white font-medium flex-shrink-0">
               {otherUsername[0]?.toUpperCase() || '?'}
             </div>
-            <OnlineIndicator isOnline={isUserOnline(otherUserId)} size="sm" />
+            {!isGroup && <OnlineIndicator isOnline={otherUserOnline} size="sm" />}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[#050505] font-semibold text-[15px] truncate">{otherUsername}</p>
             <div className="flex items-center gap-1 text-[13px] truncate">
-              {isUserOnline(otherUserId) ? (
-                <span className="text-[#31A24C]">En línea</span>
-              ) : (
-                <span className="text-[#65676b]">Desconectado</span>
+              {!isGroup && (
+                <>
+                  {otherUserOnline ? (
+                    <span className="text-[#31A24C]">En línea</span>
+                  ) : (
+                    <span className="text-[#65676b]">Desconectado</span>
+                  )}
+                  <span className="text-[#65676b] mx-1">·</span>
+                </>
               )}
-              <span className="text-[#65676b] mx-1">·</span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#65676b" strokeWidth="2" className="flex-shrink-0">
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                 <path d="M7 11V7a5 5 0 0 1 10 0v4" />
@@ -428,13 +515,34 @@ export default function ConversationPage() {
               <span className="text-[#65676b]">E2E</span>
             </div>
           </div>
-          <button
-            onClick={initiateCall}
-            className="p-2 rounded-full hover:bg-[#f0f2f5] text-[#0084ff] transition-colors"
-            title="Iniciar videollamada cifrada"
-          >
-            <Video className="w-6 h-6" fill="currentColor" />
-          </button>
+          {isGroup ? (
+            /* Botón de llamada grupal — más prominente para que sea obvio */
+            <button
+              onClick={joinGroupCall}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#0084ff] hover:bg-[#0070d8] text-white text-[13px] font-medium transition-colors shadow-sm"
+              title="Iniciar o unirse a llamada grupal"
+            >
+              <Users className="w-4 h-4" />
+              <span>Llamada grupal</span>
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => initiateCall(true)}
+                className="p-2 rounded-full hover:bg-[#f0f2f5] text-[#0084ff] transition-colors"
+                title="Llamada de voz cifrada"
+              >
+                <Phone className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => initiateCall()}
+                className="p-2 rounded-full hover:bg-[#f0f2f5] text-[#0084ff] transition-colors"
+                title="Videollamada cifrada"
+              >
+                <Video className="w-6 h-6" fill="currentColor" />
+              </button>
+            </>
+          )}
         </div>
 
         {/* Mensajes */}
@@ -484,11 +592,8 @@ export default function ConversationPage() {
                         isOwnMessage={isMe}
                         onDownload={triggerDownload}
                         onViewImage={(id) => {
-                          const allImages = messages
-                            .filter(m => m.attachment?.attachmentType === 'image')
-                            .map(m => ({ id: m.attachment!.id, filename: m.attachment!.filename }));
-                          const index = allImages.findIndex(img => img.id === id);
-                          setViewerState({ images: allImages, index: Math.max(0, index) });
+                          const index = imageGallery.findIndex(img => img.id === id);
+                          setViewerState({ images: imageGallery, index: Math.max(0, index) });
                         }}
                         onLoadThumbnail={(id) => downloadAttachment(id, true)}
                       />
@@ -614,7 +719,6 @@ export default function ConversationPage() {
                     const uploadData = await uploadRes.json();
 
                     // Enviar mensaje tipo voice
-                    const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
                     const content = `[voice:${uploadData.attachmentId}] Mensaje de voz`;
                     const e2eEncrypted = encryptMessageE2E(content, sharedKey);
 
@@ -645,6 +749,22 @@ export default function ConversationPage() {
                     if (msgRes.ok) {
                       const data = await msgRes.json();
                       setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: data.message.id } : m));
+                      broadcastMessage({
+                        id: data.message.id,
+                        senderId: user?.id || '',
+                        e2e: e2eEncrypted,
+                        createdAt: data.message.created_at ?? new Date().toISOString(),
+                        messageType: 'voice',
+                        attachment: {
+                          id: uploadData.attachmentId,
+                          filename: 'voice.webm',
+                          mimeType: 'audio/webm',
+                          sizeBytes: result.sizeBytes,
+                          attachmentType: 'voice' as const,
+                          durationMs: result.durationMs,
+                          waveformData: result.waveformData,
+                        },
+                      });
                     }
                   } catch (err) {
                     console.error('Voice send error:', err);

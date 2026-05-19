@@ -39,6 +39,17 @@ export async function GET(request: NextRequest) {
   const participants = myParticipants as MyParticipant[];
   const conversationIds = participants.map(p => p.conversation_id);
 
+  // Query 2a: metadatos de las conversaciones (is_group, name)
+  const { data: convMetadata } = await supabase
+    .from('conversations')
+    .select('id, is_group, name')
+    .in('id', conversationIds);
+
+  const convMetaById = new Map<string, { is_group: boolean; name: string | null }>();
+  for (const c of (convMetadata ?? []) as Array<{ id: string; is_group: boolean; name: string | null }>) {
+    convMetaById.set(c.id, { is_group: c.is_group, name: c.name });
+  }
+
   // Query 2: el otro participante de todas las conversaciones a la vez
   const { data: otherParticipants } = await supabase
     .from('conversation_participants')
@@ -86,6 +97,7 @@ export async function GET(request: NextRequest) {
     const otherUser = usersById.get(otherUserId);
     if (!otherUser) continue;
 
+    const meta = convMetaById.get(p.conversation_id);
     conversations.push({
       id: p.conversation_id,
       otherUser,
@@ -98,6 +110,8 @@ export async function GET(request: NextRequest) {
       isArchived:  p.is_archived  ?? false,
       archivedAt:  p.archived_at  ?? null,
       mutedUntil:  p.muted_until  ?? null,
+      isGroup:     meta?.is_group  ?? false,
+      groupName:   meta?.name      ?? null,
     });
   }
 
@@ -126,23 +140,22 @@ export async function POST(request: NextRequest) {
 
     const supabase = getSupabaseAdmin();
 
-    // Verificar que no existe ya una conversación entre estos dos usuarios
-    const { data: existingParticipants } = await supabase
+    // Verificar que no existe ya una conversación entre estos dos usuarios (2 queries en lugar de N+1)
+    const { data: myConvs } = await supabase
       .from('conversation_participants')
       .select('conversation_id')
       .eq('user_id', user.sub);
 
-    if (existingParticipants) {
-      for (const ep of existingParticipants) {
-        const { data: otherInConv } = await supabase
-          .from('conversation_participants')
-          .select('user_id')
-          .eq('conversation_id', ep.conversation_id)
-          .eq('user_id', otherUserId)
-          .limit(1);
-        if (otherInConv && otherInConv.length > 0) {
-          return NextResponse.json({ conversationId: ep.conversation_id });
-        }
+    if (myConvs && myConvs.length > 0) {
+      const myConvIds = myConvs.map((c: { conversation_id: string }) => c.conversation_id);
+      const { data: shared } = await supabase
+        .from('conversation_participants')
+        .select('conversation_id')
+        .eq('user_id', otherUserId)
+        .in('conversation_id', myConvIds)
+        .limit(1);
+      if (shared && shared.length > 0) {
+        return NextResponse.json({ conversationId: shared[0].conversation_id });
       }
     }
 

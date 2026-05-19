@@ -15,7 +15,7 @@ export async function PATCH(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { messageId, conversationId, status } = body;
+    const { messageId, messageIds, conversationId, status } = body;
 
     if (!status || !['delivered', 'read'].includes(status)) {
       return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
@@ -23,7 +23,22 @@ export async function PATCH(request: NextRequest) {
 
     const supabase = getSupabaseAdmin();
 
-    if (messageId) {
+    if (Array.isArray(messageIds) && messageIds.length > 0) {
+      // Batch: varios messageIds de un solo envío
+      const upserts = (messageIds as string[]).map((mid) => ({
+        message_id: mid,
+        user_id: user.sub,
+        status,
+        updated_at: new Date().toISOString(),
+      }));
+      const { error } = await supabase
+        .from('message_status')
+        .upsert(upserts, { onConflict: 'message_id,user_id' });
+      if (error) {
+        console.error('Batch update message status error:', error);
+        return NextResponse.json({ error: 'Failed to update statuses' }, { status: 500 });
+      }
+    } else if (messageId) {
       // Actualizar un mensaje individual
       const { error } = await supabase
         .from('message_status')

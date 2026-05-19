@@ -7,20 +7,14 @@
 
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { createClient, RealtimeChannel } from '@supabase/supabase-js';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { RealtimeChannel } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabase/client';
 
 interface TypingUser {
   userId: string;
   username: string;
   timestamp: number;
-}
-
-function getRealtimeClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) throw new Error('Missing Supabase env vars');
-  return createClient(url, anonKey);
 }
 
 /** Tiempo en ms después del cual se considera que dejó de escribir */
@@ -33,14 +27,17 @@ export function useTypingIndicator(
 ) {
   const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const supabaseRef = useRef(getRealtimeClient());
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSentRef = useRef<number>(0);
 
   useEffect(() => {
     if (!conversationId || !userId) return;
 
-    const supabase = supabaseRef.current;
+    // Limpiar canal previo con el mismo nombre (evita error "after subscribe" con cliente compartido)
+    supabase.getChannels()
+      .filter(ch => ch.topic === `realtime:typing:${conversationId}`)
+      .forEach(ch => supabase.removeChannel(ch));
+
     const channel = supabase.channel(`typing:${conversationId}`);
 
     channel
@@ -68,14 +65,14 @@ export function useTypingIndicator(
 
     // Limpiar indicadores caducados cada segundo
     const cleanup = setInterval(() => {
-      setTypingUsers(prev =>
-        prev.filter(u => Date.now() - u.timestamp < TYPING_TIMEOUT)
-      );
+      setTypingUsers(prev => {
+        const filtered = prev.filter(u => Date.now() - u.timestamp < TYPING_TIMEOUT);
+        return filtered.length === prev.length ? prev : filtered;
+      });
     }, 1000);
 
     return () => {
       clearInterval(cleanup);
-      channel.unsubscribe();
       supabase.removeChannel(channel);
     };
   }, [conversationId, userId]);
@@ -122,11 +119,11 @@ export function useTypingIndicator(
    * Texto formateado para mostrar en la UI
    * Ej: "Juan está escribiendo...", "Juan y María están escribiendo..."
    */
-  const typingText = typingUsers.length === 0
-    ? null
-    : typingUsers.length === 1
-      ? `${typingUsers[0].username} está escribiendo...`
-      : `${typingUsers.map(u => u.username).join(' y ')} están escribiendo...`;
+  const typingText = useMemo(() => {
+    if (typingUsers.length === 0) return null;
+    if (typingUsers.length === 1) return `${typingUsers[0].username} está escribiendo...`;
+    return `${typingUsers.map(u => u.username).join(' y ')} están escribiendo...`;
+  }, [typingUsers]);
 
   return { typingUsers, typingText, sendTyping, stopTyping };
 }
