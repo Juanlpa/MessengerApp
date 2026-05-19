@@ -18,6 +18,7 @@ import {
   setupSenderTransform,
   setupReceiverTransform,
 } from './insertable-streams';
+import { deriveHourlyKey } from './frame-crypto';
 
 export interface MeshParticipant {
   userId: string;
@@ -46,8 +47,9 @@ export class MeshManager {
   private localStream: MediaStream | null = null;
   private sharedKey: Uint8Array | null = null;
   private analyserNodes = new Map<string, AnalyserNode>();
-  private audioContexts = new Map<string, AudioContext>();
+  private audioContext: AudioContext | null = null;
   private speakingInterval: ReturnType<typeof setInterval> | null = null;
+  private hourlyKeyCache: { hourIndex: number; key: Promise<CryptoKey> } | null = null;
   private onParticipantsChange: OnParticipantsChange;
   private supabase;
 
@@ -167,7 +169,13 @@ export class MeshManager {
 
       // Insertable Streams — descifrado
       if (this.sharedKey && isInsertableStreamsSupported()) {
-        setupReceiverTransform(e.receiver, this.sharedKey).catch(() => {});
+        this.getHourlyKey()
+          .then(key => {
+            // Guard: only set up if this peer connection is still active
+            if (this.peers.get(peerId) !== pc) return;
+            return setupReceiverTransform(e.receiver, key);
+          })
+          .catch(() => {});
       }
 
       const participant = this.participants.get(peerId);
@@ -183,7 +191,12 @@ export class MeshManager {
       this.localStream.getTracks().forEach((track) => {
         const sender = pc.addTrack(track, this.localStream!);
         if (this.sharedKey && isInsertableStreamsSupported()) {
-          setupSenderTransform(sender, this.sharedKey).catch(() => {});
+          this.getHourlyKey()
+            .then(key => {
+              if (this.peers.get(peerId) !== pc) return;
+              return setupSenderTransform(sender, key);
+            })
+            .catch(() => {});
         }
       });
     }
@@ -204,21 +217,32 @@ export class MeshManager {
     this.peers.delete(peerId);
     this.participants.delete(peerId);
     this.analyserNodes.delete(peerId);
-    this.audioContexts.get(peerId)?.close().catch(() => {});
-    this.audioContexts.delete(peerId);
     this.notify();
+  }
+
+  private getHourlyKey(): Promise<CryptoKey> {
+    const hourIndex = Math.floor(Date.now() / 3_600_000);
+    if (this.hourlyKeyCache?.hourIndex === hourIndex) return this.hourlyKeyCache.key;
+    const keyPromise = deriveHourlyKey(this.sharedKey!).catch((err) => {
+      // Clear cache so the next call retries instead of returning the same rejected Promise
+      if (this.hourlyKeyCache?.key === keyPromise) this.hourlyKeyCache = null;
+      throw err;
+    });
+    this.hourlyKeyCache = { hourIndex, key: keyPromise };
+    return keyPromise;
   }
 
   private setupSpeakingDetection(userId: string, stream: MediaStream) {
     try {
-      const ctx = new AudioContext();
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
+      if (!this.audioContext) this.audioContext = new AudioContext();
+      const source = this.audioContext.createMediaStreamSource(stream);
+      const analyser = this.audioContext.createAnalyser();
       analyser.fftSize = 256;
       source.connect(analyser);
       this.analyserNodes.set(userId, analyser);
-      this.audioContexts.set(userId, ctx);
-    } catch {}
+    } catch {
+      this.analyserNodes.delete(userId);
+    }
   }
 
   private startSpeakingDetection() {
@@ -238,7 +262,7 @@ export class MeshManager {
           }
         }
       });
-    }, 200);
+    }, 500);
   }
 
   leave() {
@@ -248,8 +272,8 @@ export class MeshManager {
     this.peers.clear();
     this.participants.clear();
     this.analyserNodes.clear();
-    this.audioContexts.forEach((ctx) => ctx.close().catch(() => {}));
-    this.audioContexts.clear();
+    this.audioContext?.close().catch(() => {});
+    this.audioContext = null;
     if (this.channel) this.supabase.removeChannel(this.channel);
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;

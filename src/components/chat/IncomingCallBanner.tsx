@@ -3,11 +3,14 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCallStore } from '@/stores/call-store';
+import { useAuthStore } from '@/stores/auth-store';
 import { startRingtone, stopRingtone } from '@/lib/audio/ringtone';
+import { supabase } from '@/lib/supabase/client';
 
 export function IncomingCallBanner() {
   const router = useRouter();
   const { incomingCall, clearIncomingCall } = useCallStore();
+  const { user } = useAuthStore();
 
   useEffect(() => {
     if (incomingCall) {
@@ -26,6 +29,20 @@ export function IncomingCallBanner() {
   };
 
   const handleReject = () => {
+    if (user?.id) {
+      // Notify the caller so they see "Llamada rechazada" immediately instead of waiting 30s
+      const ch = supabase.channel(`call_${incomingCall.conversationId}`);
+      ch.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          ch.send({
+            type: 'broadcast',
+            event: 'signal',
+            payload: { type: 'reject', senderId: user.id },
+          });
+          setTimeout(() => supabase.removeChannel(ch), 500);
+        }
+      });
+    }
     clearIncomingCall();
   };
 

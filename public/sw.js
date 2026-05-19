@@ -1,6 +1,11 @@
 self.addEventListener('push', (event) => {
   if (!event.data) return;
-  const data = event.data.json();
+  let data;
+  try {
+    data = event.data.json();
+  } catch {
+    return;
+  }
   const { title, body, conversationId, type } = data;
 
   const options = {

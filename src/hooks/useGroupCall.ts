@@ -19,10 +19,14 @@ export function useGroupCall(
   const managerRef = useRef<MeshManager | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const isJoiningRef = useRef(false);
 
   const joinCall = useCallback(async () => {
+    if (isJoiningRef.current || managerRef.current) return; // guard double-join
+    isJoiningRef.current = true;
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
@@ -34,12 +38,19 @@ export function useGroupCall(
       await manager.join(stream, sharedKey);
       setCallState('connected');
     } catch (err: unknown) {
+      // Stop tracks so camera/mic LED turns off on any error
+      stream?.getTracks().forEach((t) => t.stop());
+      localStreamRef.current = null;
+      if (localVideoRef.current) localVideoRef.current.srcObject = null;
+      managerRef.current = null;
       const error = err as Error;
       if (error.message?.includes('Máximo')) {
         alert(error.message);
       } else {
         alert('No se pudo acceder a la cámara/micrófono. Verifica los permisos.');
       }
+    } finally {
+      isJoiningRef.current = false;
     }
   }, [conversationId, userId, username, sharedKey]);
 

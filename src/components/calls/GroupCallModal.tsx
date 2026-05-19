@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { MeshParticipant } from '@/lib/webrtc/mesh-manager';
 
 interface Props {
@@ -15,7 +15,7 @@ interface Props {
   onLeave: () => void;
 }
 
-function ParticipantTile({
+const ParticipantTile = memo(function ParticipantTile({
   participant,
   isLocal = false,
 }: {
@@ -79,7 +79,13 @@ function ParticipantTile({
       )}
     </div>
   );
-}
+}, (prev, next) =>
+  prev.participant.stream === next.participant.stream &&
+  prev.participant.isSpeaking === next.participant.isSpeaking &&
+  prev.participant.isMuted === next.participant.isMuted &&
+  prev.participant.username === next.participant.username &&
+  prev.isLocal === next.isLocal
+);
 
 export function GroupCallModal({
   isOpen,

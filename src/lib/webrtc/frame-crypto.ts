@@ -10,6 +10,33 @@
 const IV_LENGTH = 12;
 const AUDIO_UNENCRYPTED_BYTES = 1;
 
+/** Deriva una clave AES-GCM específica para la hora actual usando HKDF.
+ *  Ambos lados calculan independientemente la misma clave porque usan
+ *  el mismo índice de hora (floor(now / 3600000)). */
+export async function deriveHourlyKey(rawKey: Uint8Array): Promise<CryptoKey> {
+  const hourIndex = Math.floor(Date.now() / 3_600_000);
+  const salt = new Uint8Array(4);
+  new DataView(salt.buffer).setUint32(0, hourIndex, false);
+
+  const baseKey = await crypto.subtle.importKey(
+    'raw',
+    new Uint8Array(rawKey).buffer as ArrayBuffer,
+    { name: 'HKDF' },
+    false,
+    ['deriveKey']
+  );
+
+  const info = new TextEncoder().encode('messenger-call-frame-v1');
+
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt, info },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
 export async function importSharedKey(rawKey: Uint8Array): Promise<CryptoKey> {
   // Copiar a ArrayBuffer limpio para evitar problema de tipo SharedArrayBuffer
   const keyBuffer = new Uint8Array(rawKey).buffer as ArrayBuffer;

@@ -8,7 +8,12 @@
  * Spec: https://www.w3.org/TR/webrtc-encoded-transform/
  */
 
-import { encryptFrame, decryptFrame, importSharedKey } from './frame-crypto';
+import { encryptFrame, decryptFrame } from './frame-crypto';
+
+/** Contenedor mutable que permite rotar la clave en transforms ya activos. */
+export interface KeyContainer {
+  current: CryptoKey | null;
+}
 
 export function isInsertableStreamsSupported(): boolean {
   return (
@@ -17,37 +22,45 @@ export function isInsertableStreamsSupported(): boolean {
   );
 }
 
+/**
+ * Configura el transform de cifrado sobre un sender.
+ * @param initialKey CryptoKey AES-GCM ya importada (tipicamente derivada por hora con HKDF)
+ * @returns KeyContainer — actualizar `container.current` para rotar la clave sin recrear el transform
+ */
 export async function setupSenderTransform(
   sender: RTCRtpSender,
-  rawKey: Uint8Array
-): Promise<void> {
-  if (!isInsertableStreamsSupported()) return;
+  initialKey: CryptoKey
+): Promise<KeyContainer> {
+  const container: KeyContainer = { current: initialKey };
+  if (!isInsertableStreamsSupported()) return container;
 
-  const key = await importSharedKey(rawKey);
-
-  // La API usa createEncodedStreams() — cast necesario porque los tipos de TS
-  // aún no incluyen esta API experimental en todas las versiones
   const { readable, writable } = (sender as unknown as {
     createEncodedStreams(): { readable: ReadableStream; writable: WritableStream };
   }).createEncodedStreams();
 
   const transformStream = new TransformStream({
     async transform(frame, controller) {
-      await encryptFrame(frame as RTCEncodedVideoFrame, key);
+      if (container.current) {
+        await encryptFrame(frame as RTCEncodedVideoFrame, container.current);
+      }
       controller.enqueue(frame);
     },
   });
 
-  readable.pipeThrough(transformStream).pipeTo(writable);
+  readable.pipeThrough(transformStream).pipeTo(writable).catch(() => {});
+  return container;
 }
 
+/**
+ * Configura el transform de descifrado sobre un receiver.
+ * @returns KeyContainer — actualizar `container.current` para rotar la clave sin recrear el transform
+ */
 export async function setupReceiverTransform(
   receiver: RTCRtpReceiver,
-  rawKey: Uint8Array
-): Promise<void> {
-  if (!isInsertableStreamsSupported()) return;
-
-  const key = await importSharedKey(rawKey);
+  initialKey: CryptoKey
+): Promise<KeyContainer> {
+  const container: KeyContainer = { current: initialKey };
+  if (!isInsertableStreamsSupported()) return container;
 
   const { readable, writable } = (receiver as unknown as {
     createEncodedStreams(): { readable: ReadableStream; writable: WritableStream };
@@ -55,10 +68,13 @@ export async function setupReceiverTransform(
 
   const transformStream = new TransformStream({
     async transform(frame, controller) {
-      await decryptFrame(frame as RTCEncodedVideoFrame, key);
+      if (container.current) {
+        await decryptFrame(frame as RTCEncodedVideoFrame, container.current);
+      }
       controller.enqueue(frame);
     },
   });
 
-  readable.pipeThrough(transformStream).pipeTo(writable);
+  readable.pipeThrough(transformStream).pipeTo(writable).catch(() => {});
+  return container;
 }
