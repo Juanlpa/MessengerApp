@@ -9,7 +9,7 @@
  * - Voz: renderiza VoicePlayer (delegado al componente padre)
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Download, FileText, Image as ImageIcon, Loader2, Eye } from 'lucide-react';
 
 interface AttachmentPreviewProps {
@@ -38,6 +38,8 @@ export function AttachmentPreview({
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  // Track the current blob URL in a ref so cleanup can revoke it even though it's set asynchronously
+  const thumbnailUrlRef = useRef<string | null>(null);
 
   // Cargar thumbnail para imágenes
   useEffect(() => {
@@ -49,13 +51,17 @@ export function AttachmentPreview({
     onLoadThumbnail(attachmentId).then(result => {
       if (!cancelled && result) {
         setThumbnailUrl(result.blobUrl);
+        thumbnailUrlRef.current = result.blobUrl;
       }
       if (!cancelled) setLoading(false);
     });
 
     return () => {
       cancelled = true;
-      if (thumbnailUrl) URL.revokeObjectURL(thumbnailUrl);
+      if (thumbnailUrlRef.current) {
+        URL.revokeObjectURL(thumbnailUrlRef.current);
+        thumbnailUrlRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachmentId, attachmentType]);

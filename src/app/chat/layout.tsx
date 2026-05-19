@@ -16,7 +16,8 @@ function GlobalCallListenerWrapper({ userId, children }: { userId: string; child
 
 export default function ChatLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { user, isLoading } = useAuthStore();
+  const user = useAuthStore(s => s.user);
+  const isLoading = useAuthStore(s => s.isLoading);
 
   useEffect(() => {
     const token = localStorage.getItem('auth_token');

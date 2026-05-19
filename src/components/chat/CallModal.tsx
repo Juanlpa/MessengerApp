@@ -1,6 +1,9 @@
-import React, { useState, useCallback, useRef } from 'react';
-import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Shield, ShieldAlert, UserPlus, X, Search } from 'lucide-react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
+import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Shield, ShieldAlert, UserPlus, X, Search, Sparkles } from 'lucide-react';
 import { CallState } from '@/hooks/useWebRTC';
+import { VideoFilterPanel } from '@/components/calls/VideoFilterPanel';
+import { type FilterId } from '@/lib/filters/canvas-filters';
+import { type BackgroundId } from '@/hooks/useVideoFilter';
 
 interface Contact {
   id: string;
@@ -23,6 +26,10 @@ interface CallModalProps {
   isE2EMedia?: boolean;
   token?: string;
   onAddParticipant?: (contactId: string, contactName: string) => Promise<void>;
+  activeFilter?: FilterId;
+  activeBackground?: BackgroundId;
+  onFilterChange?: (f: FilterId) => void;
+  onBackgroundChange?: (bg: BackgroundId) => void;
 }
 
 const STATE_LABELS: Partial<Record<CallState, string>> = {
@@ -50,8 +57,13 @@ export function CallModal({
   isE2EMedia = false,
   token,
   onAddParticipant,
+  activeFilter = 'none',
+  activeBackground = 'none',
+  onFilterChange,
+  onBackgroundChange,
 }: CallModalProps) {
   const [showContacts, setShowContacts] = useState(false);
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loadingContacts, setLoadingContacts] = useState(false);
   const [search, setSearch] = useState('');
@@ -96,8 +108,9 @@ export function CallModal({
   const isTerminal = callState === 'ended' || callState === 'declined' || callState === 'missed' || callState === 'failed';
   const showControls = callState === 'calling' || callState === 'connected' || callState === 'reconnecting';
 
-  const filteredContacts = contacts.filter(c =>
-    c.username.toLowerCase().includes(search.toLowerCase())
+  const filteredContacts = useMemo(
+    () => contacts.filter(c => c.username.toLowerCase().includes(search.toLowerCase())),
+    [contacts, search]
   );
 
   const statusLabel = (() => {
@@ -229,6 +242,17 @@ export function CallModal({
           </div>
         )}
 
+        {/* Filter panel — floats above controls bar */}
+        {showFilterPanel && onFilterChange && onBackgroundChange && (
+          <VideoFilterPanel
+            activeFilter={activeFilter}
+            activeBackground={activeBackground}
+            onFilterChange={onFilterChange}
+            onBackgroundChange={onBackgroundChange}
+            onClose={() => setShowFilterPanel(false)}
+          />
+        )}
+
         {/* Overlay: header + controls */}
         <div className="absolute inset-0 flex flex-col justify-between p-6 pointer-events-none">
 
@@ -313,6 +337,21 @@ export function CallModal({
                     title="Añadir participante a la llamada"
                   >
                     <UserPlus className="w-5 h-5" />
+                  </button>
+                )}
+
+                {/* Video filters — only on video calls */}
+                {!isAudioOnly && onFilterChange && (
+                  <button
+                    onClick={() => setShowFilterPanel(s => !s)}
+                    className={`p-3 rounded-full transition-colors shadow-lg ${
+                      showFilterPanel || activeFilter !== 'none'
+                        ? 'bg-[#0084ff] hover:bg-[#0070d8]'
+                        : 'bg-gray-700 hover:bg-gray-600'
+                    } text-white`}
+                    title="Filtros de video"
+                  >
+                    <Sparkles className="w-5 h-5" />
                   </button>
                 )}
               </>

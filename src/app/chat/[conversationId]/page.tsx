@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import dynamic from 'next/dynamic';
 import { useParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import { Video, Phone, Users } from 'lucide-react';
 import { useWebRTC } from '@/hooks/useWebRTC';
-import { CallModal } from '@/components/chat/CallModal';
 import { decryptSharedKeyFromStorage } from '@/lib/crypto/key-exchange';
 import { pbkdf2 } from '@/lib/crypto/pbkdf2';
 import { encryptMessageE2E, decryptMessageE2E } from '@/lib/crypto/message-crypto';
@@ -18,11 +18,23 @@ import { OnlineIndicator } from '@/components/chat/OnlineIndicator';
 import { useAttachments } from '@/hooks/useAttachments';
 import { AttachmentButton } from '@/components/chat/AttachmentButton';
 import { AttachmentPreview } from '@/components/chat/AttachmentPreview';
-import { ImageViewer } from '@/components/chat/ImageViewer';
 import { VoiceRecordButton } from '@/components/chat/VoiceRecordButton';
 import { VoicePlayer } from '@/components/chat/VoicePlayer';
 import { useGroupCall } from '@/hooks/useGroupCall';
-import { GroupCallModal } from '@/components/calls/GroupCallModal';
+import { useVideoFilter } from '@/hooks/useVideoFilter';
+
+const CallModal = dynamic(
+  () => import('@/components/chat/CallModal').then(m => ({ default: m.CallModal })),
+  { ssr: false }
+);
+const GroupCallModal = dynamic(
+  () => import('@/components/calls/GroupCallModal').then(m => ({ default: m.GroupCallModal })),
+  { ssr: false }
+);
+const ImageViewer = dynamic(
+  () => import('@/components/chat/ImageViewer').then(m => ({ default: m.ImageViewer })),
+  { ssr: false }
+);
 
 const MAX_MESSAGES_IN_MEMORY = 500;
 
@@ -45,6 +57,76 @@ interface Message {
     waveformData?: number[];
   };
 }
+
+interface MessageTileProps {
+  msg: Message;
+  isMe: boolean;
+  isLastInGroup: boolean;
+  onViewImage: (id: string) => void;
+  onLoadThumbnail: (id: string) => Promise<{ blobUrl: string } | null>;
+  onDownload: (id: string) => Promise<void>;
+  onLoadAudio: (id: string) => Promise<{ blobUrl: string } | null>;
+}
+
+const MessageTile = memo(function MessageTile({
+  msg, isMe, isLastInGroup, onViewImage, onLoadThumbnail, onDownload, onLoadAudio,
+}: MessageTileProps) {
+  const hasAttachment = msg.attachment && msg.messageType !== 'text';
+  return (
+    <div className={`flex w-full ${isMe ? 'justify-end' : 'justify-start'} ${isLastInGroup ? 'mb-3' : 'mb-0.5'}`}>
+      <div className="flex flex-col max-w-[75%]">
+        <div
+          className={`min-w-[48px] ${
+            hasAttachment ? 'px-1.5 py-1.5' : 'px-4 py-2'
+          } ${
+            isMe
+              ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
+              : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
+          }`}
+          style={{ wordBreak: 'break-word' }}
+        >
+          {hasAttachment && msg.attachment && msg.attachment.attachmentType !== 'voice' && (
+            <AttachmentPreview
+              attachmentId={msg.attachment.id}
+              filename={msg.attachment.filename}
+              mimeType={msg.attachment.mimeType}
+              sizeBytes={msg.attachment.sizeBytes}
+              attachmentType={msg.attachment.attachmentType}
+              isOwnMessage={isMe}
+              onDownload={onDownload}
+              onViewImage={onViewImage}
+              onLoadThumbnail={onLoadThumbnail}
+            />
+          )}
+          {hasAttachment && msg.attachment && msg.attachment.attachmentType === 'voice' && (
+            <VoicePlayer
+              attachmentId={msg.attachment.id}
+              durationMs={msg.attachment.durationMs ?? 0}
+              waveformData={msg.attachment.waveformData ?? []}
+              isOwnMessage={isMe}
+              onLoadAudio={onLoadAudio}
+            />
+          )}
+          {!hasAttachment && (
+            <p className="text-[15px] leading-tight">{msg.text || '[Mensaje cifrado]'}</p>
+          )}
+        </div>
+        {isMe && isLastInGroup && (
+          <div className="flex items-center justify-end gap-1 mt-0.5 mr-1">
+            <span className="text-[11px] text-[#65676b]">
+              {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+            <MessageStatus status={msg.status || 'sent'} isOwnMessage={true} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}, (prev, next) =>
+  prev.msg.id === next.msg.id &&
+  prev.msg.status === next.msg.status &&
+  prev.isLastInGroup === next.isLastInGroup
+);
 
 export default function ConversationPage() {
   const params = useParams();
@@ -71,6 +153,16 @@ export default function ConversationPage() {
     index: number;
   } | null>(null);
 
+  // Filtros y fondos de video — se inicializa antes de las llamadas para pasar processStream
+  const {
+    activeFilter,
+    activeBackground,
+    setFilter,
+    setBackground,
+    processStream,
+    stopPipeline,
+  } = useVideoFilter();
+
   // Llamadas grupales — se define antes para pasarlo como callback a useWebRTC
   const {
     callState: groupCallState,
@@ -82,7 +174,7 @@ export default function ConversationPage() {
     leaveCall: leaveGroupCall,
     toggleAudio: toggleGroupAudio,
     toggleVideo: toggleGroupVideo,
-  } = useGroupCall(conversationId, user?.id || '', user?.username || '', sharedKey);
+  } = useGroupCall(conversationId, user?.id || '', user?.username || '', sharedKey, processStream);
 
   // WebRTC para llamadas 1-a-1
   const {
@@ -108,7 +200,8 @@ export default function ConversationPage() {
     token || undefined,
     sharedKey,
     !isGroup,
-    joinGroupCall  // onUpgradeToGroup: cuando el otro lado añade un tercero, unirse al grupo
+    joinGroupCall,  // onUpgradeToGroup: cuando el otro lado añade un tercero, unirse al grupo
+    processStream
   );
 
   // Presencia online/offline
@@ -131,6 +224,13 @@ export default function ConversationPage() {
     error: attachError,
     clearError: clearAttachError,
   } = useAttachments(conversationId, token || '', sharedKey);
+
+  // Limpiar pipeline de filtros cuando no hay ninguna llamada activa
+  useEffect(() => {
+    if (callState === 'idle' && groupCallState === 'idle') {
+      stopPipeline();
+    }
+  }, [callState, groupCallState, stopPipeline]);
 
   // Añadir participante a llamada 1-a-1 → convierte a llamada grupal
   const handleAddParticipant = useCallback(async (contactId: string, contactName: string) => {
@@ -429,6 +529,26 @@ export default function ConversationPage() {
     [messages]
   );
 
+  // Stable ref so handleViewImage never changes between renders (avoids re-rendering all tiles)
+  const imageGalleryRef = useRef(imageGallery);
+  imageGalleryRef.current = imageGallery;
+
+  const handleViewImage = useCallback((id: string) => {
+    const gallery = imageGalleryRef.current;
+    const index = gallery.findIndex(img => img.id === id);
+    setViewerState({ images: gallery, index: Math.max(0, index) });
+  }, []);
+
+  const handleLoadThumbnail = useCallback(
+    (id: string) => downloadAttachment(id, true),
+    [downloadAttachment]
+  );
+
+  const handleLoadAudio = useCallback(
+    (id: string) => downloadAttachment(id, false),
+    [downloadAttachment]
+  );
+
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center bg-white min-w-0">
@@ -464,6 +584,10 @@ export default function ConversationPage() {
           onToggleAudio={toggleGroupAudio}
           onToggleVideo={toggleGroupVideo}
           onLeave={leaveGroupCall}
+          activeFilter={activeFilter}
+          activeBackground={activeBackground}
+          onFilterChange={setFilter}
+          onBackgroundChange={setBackground}
         />
       ) : (
         <CallModal
@@ -482,6 +606,10 @@ export default function ConversationPage() {
           isE2EMedia={isE2EMedia}
           token={token || undefined}
           onAddParticipant={handleAddParticipant}
+          activeFilter={activeFilter}
+          activeBackground={activeBackground}
+          onFilterChange={setFilter}
+          onBackgroundChange={setBackground}
         />
       )}
 
@@ -563,70 +691,17 @@ export default function ConversationPage() {
             const isMe = msg.senderId === user?.id;
             const nextMsg = messages[idx + 1];
             const isLastInGroup = !nextMsg || nextMsg.senderId !== msg.senderId;
-            const hasAttachment = msg.attachment && msg.messageType !== 'text';
-
             return (
-              <div
+              <MessageTile
                 key={msg.id}
-                className={`flex w-full ${isMe ? 'justify-end' : 'justify-start'} ${isLastInGroup ? 'mb-3' : 'mb-0.5'}`}
-              >
-                <div className="flex flex-col max-w-[75%]">
-                  <div
-                    className={`min-w-[48px] ${
-                      hasAttachment ? 'px-1.5 py-1.5' : 'px-4 py-2'
-                    } ${
-                      isMe
-                        ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
-                        : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
-                    }`}
-                    style={{ wordBreak: 'break-word' }}
-                  >
-                    {/* Attachment preview (image or file) */}
-                    {hasAttachment && msg.attachment && msg.attachment.attachmentType !== 'voice' && (
-                      <AttachmentPreview
-                        attachmentId={msg.attachment.id}
-                        filename={msg.attachment.filename}
-                        mimeType={msg.attachment.mimeType}
-                        sizeBytes={msg.attachment.sizeBytes}
-                        attachmentType={msg.attachment.attachmentType}
-                        isOwnMessage={isMe}
-                        onDownload={triggerDownload}
-                        onViewImage={(id) => {
-                          const index = imageGallery.findIndex(img => img.id === id);
-                          setViewerState({ images: imageGallery, index: Math.max(0, index) });
-                        }}
-                        onLoadThumbnail={(id) => downloadAttachment(id, true)}
-                      />
-                    )}
-                    {/* Voice message player */}
-                    {hasAttachment && msg.attachment && msg.attachment.attachmentType === 'voice' && (
-                      <VoicePlayer
-                        attachmentId={msg.attachment.id}
-                        durationMs={msg.attachment.durationMs ?? 0}
-                        waveformData={msg.attachment.waveformData ?? []}
-                        isOwnMessage={isMe}
-                        onLoadAudio={(id) => downloadAttachment(id, false)}
-                      />
-                    )}
-                    {/* Text content (only if text or no attachment) */}
-                    {(!hasAttachment) && (
-                      <p className="text-[15px] leading-tight">{msg.text || '[Mensaje cifrado]'}</p>
-                    )}
-                  </div>
-                  {/* Status + timestamp en mensajes propios (último del grupo) */}
-                  {isMe && isLastInGroup && (
-                    <div className="flex items-center justify-end gap-1 mt-0.5 mr-1">
-                      <span className="text-[11px] text-[#65676b]">
-                        {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                      <MessageStatus
-                        status={msg.status || 'sent'}
-                        isOwnMessage={true}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
+                msg={msg}
+                isMe={isMe}
+                isLastInGroup={isLastInGroup}
+                onViewImage={handleViewImage}
+                onLoadThumbnail={handleLoadThumbnail}
+                onDownload={triggerDownload}
+                onLoadAudio={handleLoadAudio}
+              />
             );
           })}
 

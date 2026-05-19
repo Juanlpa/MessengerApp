@@ -63,6 +63,8 @@ export function useVoiceRecorder(sharedKey: Uint8Array | null) {
   const startTimeRef = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const waveformTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Stable ref so the auto-stop timer always calls the latest stopRecording without needing it in deps
+  const stopRecordingRef = useRef<() => Promise<VoiceRecorderResult | null>>(async () => null);
 
   /**
    * Inicia la grabación de audio.
@@ -119,9 +121,9 @@ export function useVoiceRecorder(sharedKey: Uint8Array | null) {
         const elapsed = Date.now() - startTimeRef.current;
         setDurationMs(elapsed);
 
-        // Límite de duración
+        // Límite de duración — usar ref para evitar capturar stopRecording estale
         if (elapsed >= MAX_RECORDING_SECONDS * 1000) {
-          stopRecording();
+          stopRecordingRef.current();
         }
       }, 100);
 
@@ -248,6 +250,9 @@ export function useVoiceRecorder(sharedKey: Uint8Array | null) {
     analyserRef.current = null;
     chunksRef.current = [];
   }, []);
+
+  // Keep stopRecordingRef always pointing at the latest version
+  stopRecordingRef.current = stopRecording;
 
   // Cleanup on unmount
   useEffect(() => {

@@ -1,7 +1,10 @@
 'use client';
 
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { MeshParticipant } from '@/lib/webrtc/mesh-manager';
+import { VideoFilterPanel } from '@/components/calls/VideoFilterPanel';
+import { type FilterId } from '@/lib/filters/canvas-filters';
+import { type BackgroundId } from '@/hooks/useVideoFilter';
 
 interface Props {
   isOpen: boolean;
@@ -13,6 +16,10 @@ interface Props {
   onToggleAudio: () => void;
   onToggleVideo: () => void;
   onLeave: () => void;
+  activeFilter?: FilterId;
+  activeBackground?: BackgroundId;
+  onFilterChange?: (f: FilterId) => void;
+  onBackgroundChange?: (bg: BackgroundId) => void;
 }
 
 const ParticipantTile = memo(function ParticipantTile({
@@ -97,7 +104,12 @@ export function GroupCallModal({
   onToggleAudio,
   onToggleVideo,
   onLeave,
+  activeFilter = 'none',
+  activeBackground = 'none',
+  onFilterChange,
+  onBackgroundChange,
 }: Props) {
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
   if (!isOpen) return null;
 
   const participantList = Array.from(participants.values());
@@ -159,6 +171,19 @@ export function GroupCallModal({
         ))}
       </div>
 
+      {/* Filter panel — floats above the controls bar */}
+      {showFilterPanel && onFilterChange && onBackgroundChange && (
+        <div className="relative">
+          <VideoFilterPanel
+            activeFilter={activeFilter}
+            activeBackground={activeBackground}
+            onFilterChange={onFilterChange}
+            onBackgroundChange={onBackgroundChange}
+            onClose={() => setShowFilterPanel(false)}
+          />
+        </div>
+      )}
+
       {/* Barra de controles */}
       <div className="px-6 py-5 bg-black/40 flex items-center justify-center gap-5">
         {/* Toggle micrófono */}
@@ -204,6 +229,23 @@ export function GroupCallModal({
             </svg>
           )}
         </button>
+
+        {/* Filtros de video */}
+        {onFilterChange && (
+          <button
+            onClick={() => setShowFilterPanel(s => !s)}
+            className={`w-14 h-14 rounded-full flex items-center justify-center transition-colors ${
+              showFilterPanel || activeFilter !== 'none'
+                ? 'bg-[#0084ff] hover:bg-[#0070d8]'
+                : 'bg-white/20 hover:bg-white/30'
+            }`}
+            title="Filtros de video"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5">
+              <path d="M12 2L9.09 8.26L2 9.27L7 14.14L5.82 21.02L12 17.77L18.18 21.02L17 14.14L22 9.27L14.91 8.26L12 2Z"/>
+            </svg>
+          </button>
+        )}
 
         {/* Colgar */}
         <button

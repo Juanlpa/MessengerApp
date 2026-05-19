@@ -53,6 +53,7 @@ const ICE_SERVERS: RTCIceServer[] = [
 const TRANSITIONAL_STATES = new Set<CallState>(['ended', 'declined', 'missed', 'failed']);
 const TRANSITION_DELAY_MS = 2000;
 const MISSED_CALL_TIMEOUT_MS = 30_000;
+const MAX_PENDING_CANDIDATES = 100;
 const KEY_ROTATION_INTERVAL_MS = 3_600_000;
 
 /** Maps UI call states to DB status values */
@@ -71,7 +72,8 @@ export function useWebRTC(
   token?: string,
   sharedKey?: Uint8Array | null,
   enabled = true,
-  onUpgradeToGroup?: () => void | Promise<void>
+  onUpgradeToGroup?: () => void | Promise<void>,
+  processStream?: (raw: MediaStream) => MediaStream
 ) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [isAudioMuted, setIsAudioMuted] = useState(false);
@@ -96,7 +98,10 @@ export function useWebRTC(
   const keyRotationIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const hourlyKeyCacheRef = useRef<{ hourIndex: number; key: CryptoKey } | null>(null);
   // Queue for ICE candidates that arrive before setRemoteDescription completes
+  // Capped at MAX_PENDING_CANDIDATES to avoid unbounded growth on bad networks
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  // Raw getUserMedia stream — separate from localStream (which may be the processed/canvas stream)
+  const rawStreamRef = useRef<MediaStream | null>(null);
   const onUpgradeToGroupRef = useRef(onUpgradeToGroup);
   onUpgradeToGroupRef.current = onUpgradeToGroup;
   const missedTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -222,7 +227,7 @@ export function useWebRTC(
               await peerConnection.current.addIceCandidate(
                 new RTCIceCandidate(signal.candidate)
               ).catch(() => {});
-            } else {
+            } else if (pendingCandidatesRef.current.length < MAX_PENDING_CANDIDATES) {
               pendingCandidatesRef.current.push(signal.candidate);
             }
           }
@@ -343,18 +348,14 @@ export function useWebRTC(
       });
     }
 
-    if (isInsertableStreamsSupported()) {
-      console.info('[WebRTC] Insertable Streams activo — cifrado E2E de media habilitado');
-    } else {
-      console.info('[WebRTC] Insertable Streams no soportado — usando SRTP estándar');
-    }
-
     return pc;
   }, [sendSignal, setCallStateSafe]);
 
   const setupLocalMedia = async (audioOnly = false) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: !audioOnly, audio: true });
+      const rawStream = await navigator.mediaDevices.getUserMedia({ video: !audioOnly, audio: true });
+      rawStreamRef.current = rawStream;
+      const stream = (!audioOnly && processStream) ? processStream(rawStream) : rawStream;
       localStream.current = stream;
       if (!audioOnly && localVideoRef.current) localVideoRef.current.srcObject = stream;
       return true;
@@ -497,6 +498,8 @@ export function useWebRTC(
     peerConnection.current = null;
     localStream.current?.getTracks().forEach((t) => t.stop());
     localStream.current = null;
+    rawStreamRef.current?.getTracks().forEach((t) => t.stop());
+    rawStreamRef.current = null;
     remoteStream.current = null;
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
@@ -530,7 +533,8 @@ export function useWebRTC(
   };
 
   const toggleVideo = () => {
-    const track = localStream.current?.getVideoTracks()[0];
+    // Toggle raw camera track (canvas capture track enabled flag has no effect on camera)
+    const track = (rawStreamRef.current ?? localStream.current)?.getVideoTracks()[0];
     if (track) {
       track.enabled = !track.enabled;
       setIsVideoMuted(!track.enabled);
