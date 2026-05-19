@@ -43,6 +43,7 @@ const MAX_AUDIO_PARTICIPANTS = 8;
 export class MeshManager {
   private peers = new Map<string, RTCPeerConnection>();
   private participants = new Map<string, MeshParticipant>();
+  private pendingCandidates = new Map<string, RTCIceCandidateInit[]>();
   private channel: RealtimeChannel | null = null;
   private localStream: MediaStream | null = null;
   private sharedKey: Uint8Array | null = null;
@@ -117,6 +118,14 @@ export class MeshManager {
         this.addParticipant(from, username || '');
         const pc = this.getOrCreatePeer(from);
         await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+        // Flush candidates that arrived before remote description was ready
+        const queued = this.pendingCandidates.get(from) ?? [];
+        this.pendingCandidates.set(from, []);
+        for (const c of queued) {
+          await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+        }
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         this.send('answer', { from: this.userId, to: from, sdp: answer });
@@ -126,14 +135,31 @@ export class MeshManager {
         if (to !== this.userId) return;
 
         const pc = this.peers.get(from);
-        if (pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        if (!pc) return;
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+        // Flush candidates that arrived before remote description was ready
+        const queued = this.pendingCandidates.get(from) ?? [];
+        this.pendingCandidates.set(from, []);
+        for (const c of queued) {
+          await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+        }
       })
       .on('broadcast', { event: 'ice' }, async ({ payload }) => {
         const { from, to, candidate } = payload as { from: string; to: string; candidate: RTCIceCandidateInit };
         if (to !== this.userId) return;
 
         const pc = this.peers.get(from);
-        if (pc && candidate) await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        if (!pc || !candidate) return;
+
+        if (pc.remoteDescription) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+        } else {
+          // Queue candidate until setRemoteDescription completes
+          const queue = this.pendingCandidates.get(from) ?? [];
+          queue.push(candidate);
+          this.pendingCandidates.set(from, queue);
+        }
       })
       .subscribe();
   }
@@ -217,6 +243,7 @@ export class MeshManager {
     this.peers.delete(peerId);
     this.participants.delete(peerId);
     this.analyserNodes.delete(peerId);
+    this.pendingCandidates.delete(peerId);
     this.notify();
   }
 
@@ -272,6 +299,7 @@ export class MeshManager {
     this.peers.clear();
     this.participants.clear();
     this.analyserNodes.clear();
+    this.pendingCandidates.clear();
     this.audioContext?.close().catch(() => {});
     this.audioContext = null;
     if (this.channel) this.supabase.removeChannel(this.channel);

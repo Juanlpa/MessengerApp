@@ -12,7 +12,7 @@
  * - Descarga y descifrado automático del blob de voz
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Play, Pause, Loader2 } from 'lucide-react';
 import { formatDuration } from '@/hooks/useVoiceRecorder';
 
@@ -38,7 +38,6 @@ export function VoicePlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(durationMs / 1000);
   const [speed, setSpeed] = useState<PlaybackSpeed>(1);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
   const audioRef       = useRef<HTMLAudioElement | null>(null);
   const canvasRef      = useRef<HTMLCanvasElement>(null);
@@ -46,6 +45,8 @@ export function VoicePlayer({
   const containerRef   = useRef<HTMLDivElement>(null);
   const onLoadAudioRef = useRef(onLoadAudio);
   onLoadAudioRef.current = onLoadAudio;
+  // Track blob URL in a ref so unmount cleanup can revoke it (audioUrl state is null at mount time)
+  const audioUrlRef = useRef<string | null>(null);
 
   // Colores según si es mensaje propio o recibido
   const colors = isOwnMessage
@@ -54,12 +55,12 @@ export function VoicePlayer({
 
   // ── Cargar audio al primer play ─────────────────────────────────
   const loadAudio = useCallback(async () => {
-    if (audioUrl) return audioUrl;
+    if (audioUrlRef.current) return audioUrlRef.current;
     setIsLoading(true);
     try {
       const result = await onLoadAudioRef.current(attachmentId);
       if (result) {
-        setAudioUrl(result.blobUrl);
+        audioUrlRef.current = result.blobUrl;
         return result.blobUrl;
       }
     } catch (err) {
@@ -68,7 +69,7 @@ export function VoicePlayer({
       setIsLoading(false);
     }
     return null;
-  }, [attachmentId, audioUrl]);
+  }, [attachmentId]);
 
   // ── Play/Pause ──────────────────────────────────────────────────
   const togglePlay = useCallback(async () => {
@@ -200,9 +201,8 @@ export function VoicePlayer({
         audioRef.current.pause();
         audioRef.current = null;
       }
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const displayTime = isPlaying || currentTime > 0

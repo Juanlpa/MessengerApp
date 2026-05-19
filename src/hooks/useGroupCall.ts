@@ -9,7 +9,8 @@ export function useGroupCall(
   conversationId: string,
   userId: string,
   username: string,
-  sharedKey: Uint8Array | null
+  sharedKey: Uint8Array | null,
+  processStream?: (raw: MediaStream) => MediaStream
 ) {
   const [callState, setCallState] = useState<GroupCallState>('idle');
   const [participants, setParticipants] = useState<Map<string, MeshParticipant>>(new Map());
@@ -18,6 +19,7 @@ export function useGroupCall(
 
   const managerRef = useRef<MeshManager | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const rawStreamRef = useRef<MediaStream | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const isJoiningRef = useRef(false);
 
@@ -27,19 +29,22 @@ export function useGroupCall(
     let stream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      localStreamRef.current = stream;
-      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+      rawStreamRef.current = stream;
+      const processedStream = processStream ? processStream(stream) : stream;
+      localStreamRef.current = processedStream;
+      if (localVideoRef.current) localVideoRef.current.srcObject = processedStream;
 
       const manager = new MeshManager(conversationId, userId, username, (updated) => {
         setParticipants(new Map(updated));
       });
 
       managerRef.current = manager;
-      await manager.join(stream, sharedKey);
+      await manager.join(processedStream, sharedKey);
       setCallState('connected');
     } catch (err: unknown) {
-      // Stop tracks so camera/mic LED turns off on any error
+      // Stop raw tracks so camera/mic LED turns off on any error
       stream?.getTracks().forEach((t) => t.stop());
+      rawStreamRef.current = null;
       localStreamRef.current = null;
       if (localVideoRef.current) localVideoRef.current.srcObject = null;
       managerRef.current = null;
@@ -57,6 +62,8 @@ export function useGroupCall(
   const leaveCall = useCallback(() => {
     managerRef.current?.leave();
     managerRef.current = null;
+    rawStreamRef.current?.getTracks().forEach((t) => t.stop());
+    rawStreamRef.current = null;
     localStreamRef.current = null;
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     setCallState('idle');
@@ -75,7 +82,8 @@ export function useGroupCall(
   }, []);
 
   const toggleVideo = useCallback(() => {
-    const stream = localStreamRef.current ?? managerRef.current?.getLocalStream();
+    // Toggle raw camera track (canvas capture track enabled flag has no effect on camera)
+    const stream = rawStreamRef.current ?? localStreamRef.current ?? managerRef.current?.getLocalStream();
     const track = stream?.getVideoTracks()[0];
     if (track) {
       track.enabled = !track.enabled;
@@ -90,10 +98,11 @@ export function useGroupCall(
         managerRef.current.leave();
         managerRef.current = null;
       }
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach((t) => t.stop());
-        localStreamRef.current = null;
+      if (rawStreamRef.current) {
+        rawStreamRef.current.getTracks().forEach((t) => t.stop());
+        rawStreamRef.current = null;
       }
+      localStreamRef.current = null;
     };
   }, []);
 
