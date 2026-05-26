@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import Link from 'next/link';
-import { Video } from 'lucide-react';
+import { Video, Search, X } from 'lucide-react';
 import { useWebRTC } from '@/hooks/useWebRTC';
 import { CallModal } from '@/components/chat/CallModal';
 import { useRealtimeMessages, useMarkAsRead } from '@/hooks/useRealtimeMessages';
@@ -13,6 +13,11 @@ import { usePresence } from '@/hooks/usePresence';
 import { MessageStatus } from '@/components/chat/MessageStatus';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
 import { OnlineIndicator } from '@/components/chat/OnlineIndicator';
+import { MessageReactions } from '@/components/chat/MessageReactions';
+import { QuotedMessage } from '@/components/chat/QuotedMessage';
+import { ReplyPreview } from '@/components/chat/ReplyPreview';
+
+const MESSAGES_PER_PAGE = 30;
 
 interface Message {
   id: string;
@@ -22,6 +27,10 @@ interface Message {
   createdAt: string;
   error?: string;
   status?: 'sent' | 'delivered' | 'read';
+  isDeleted?: boolean;
+  replyToId?: string | null;
+  editedAt?: string | null;
+  reactions?: { emoji: string; userIds: string[] }[];
 }
 
 export default function ConversationPage() {
@@ -36,7 +45,21 @@ export default function ConversationPage() {
   const [sharedKey, setSharedKey] = useState<Uint8Array | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // Scroll infinito
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Búsqueda
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  // Responder mensaje
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  // Editar mensaje
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const prevScrollHeightRef = useRef<number>(0);
 
   // WebRTC para llamadas
   const {
@@ -87,7 +110,33 @@ export default function ConversationPage() {
     );
   }, []);
 
-  // Suscripción Realtime (reemplaza polling)
+  const handleMessageUpdated = useCallback((
+    messageId: string,
+    patch: { text?: string; isDeleted?: boolean; editedAt?: string | null }
+  ) => {
+    setMessages(prev => prev.map(m =>
+      m.id === messageId ? { ...m, ...patch } : m
+    ));
+  }, []);
+
+  const handleReactionsUpdated = useCallback(async (messageId: string) => {
+    if (!token) return;
+    try {
+      const res = await fetch(`/api/messages/${messageId}/reactions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(prev => prev.map(m =>
+          m.id === messageId ? { ...m, reactions: data.reactions } : m
+        ));
+      }
+    } catch (err) {
+      console.error('Error fetching reactions:', err);
+    }
+  }, [token]);
+
+  // Suscripción Realtime
   useRealtimeMessages({
     conversationId,
     userId: user?.id || '',
@@ -95,6 +144,8 @@ export default function ConversationPage() {
     sharedKey,
     onNewMessage: handleNewMessage,
     onMessageStatusUpdate: handleStatusUpdate,
+    onMessageUpdated: handleMessageUpdated,
+    onReactionsUpdated: handleReactionsUpdated,
   });
 
   // Marcar mensajes como leídos cuando la conversación está abierta
@@ -138,11 +189,14 @@ export default function ConversationPage() {
     }
   }, [token, user, conversationId]);
 
-  const loadMessages = async (key?: Uint8Array) => {
+  const loadMessages = useCallback(async (key?: Uint8Array, cursor?: string) => {
     const currentKey = key || sharedKey;
     if (!token || !currentKey) return;
 
-    const res = await fetch(`/api/conversations/${conversationId}/messages?t=${Date.now()}`, {
+    const params = new URLSearchParams({ t: Date.now().toString(), limit: String(MESSAGES_PER_PAGE) });
+    if (cursor) params.set('cursor', cursor);
+
+    const res = await fetch(`/api/conversations/${conversationId}/messages?${params}`, {
       cache: 'no-store',
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -152,41 +206,94 @@ export default function ConversationPage() {
 
     const { decryptMessageE2E } = await import('@/lib/crypto/message-crypto');
 
-    const decrypted: Message[] = data.messages.map((msg: Message) => {
+    const decrypted: Message[] = (data.messages as any[]).map((msg) => {
+      if (msg.isDeleted) {
+        return { ...msg, text: undefined, status: 'delivered' as const };
+      }
       if (!msg.e2e) {
-        return { ...msg, text: '[Error: datos E2E no disponibles]', status: 'sent' as const };
+        return { ...msg, text: '[Error: datos E2E no disponibles]', status: 'delivered' as const };
       }
       try {
         const text = decryptMessageE2E(msg.e2e, currentKey);
         return { ...msg, text, status: 'delivered' as const };
       } catch {
-        return { ...msg, text: '[Error al descifrar]', status: 'sent' as const };
+        return { ...msg, text: '[Error al descifrar]', status: 'delivered' as const };
       }
     });
 
-    setMessages(decrypted);
-  };
+    setHasMore(data.hasMore ?? false);
+
+    if (cursor) {
+      // Preservar posición de scroll al hacer prepend
+      const container = scrollContainerRef.current;
+      if (container) prevScrollHeightRef.current = container.scrollHeight;
+      setMessages(prev => [...decrypted, ...prev]);
+    } else {
+      setMessages(decrypted);
+    }
+  }, [conversationId, token, sharedKey]);
 
   useEffect(() => {
     initConversation();
   }, [initConversation]);
 
-  // NO más polling — ahora es Realtime
-
+  // Scroll al fondo solo en la carga inicial
+  const isInitialLoad = useRef(true);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (isInitialLoad.current && messages.length > 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      isInitialLoad.current = false;
+    }
   }, [messages]);
+
+  // Preservar posición de scroll al hacer prepend (load more)
+  useEffect(() => {
+    if (prevScrollHeightRef.current > 0 && scrollContainerRef.current) {
+      const container = scrollContainerRef.current;
+      container.scrollTop = container.scrollHeight - prevScrollHeightRef.current;
+      prevScrollHeightRef.current = 0;
+    }
+  }, [messages]);
+
+  // Nuevo mensaje propio → scroll al fondo
+  const prevLengthRef = useRef(0);
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (messages.length > prevLengthRef.current && last?.senderId === user?.id) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevLengthRef.current = messages.length;
+  }, [messages, user?.id]);
+
+  // Scroll infinito: detectar cuando el usuario sube hasta arriba
+  const handleScroll = useCallback(async () => {
+    const container = scrollContainerRef.current;
+    if (!container || !hasMore || loadingMore) return;
+    if (container.scrollTop < 80) {
+      const oldest = messages[0];
+      if (!oldest) return;
+      setLoadingMore(true);
+      await loadMessages(undefined, oldest.createdAt);
+      setLoadingMore(false);
+    }
+  }, [hasMore, loadingMore, messages, loadMessages]);
+
+  // Búsqueda local sobre mensajes ya descifrados
+  const filteredMessages = useMemo(() => {
+    if (!searchQuery.trim()) return messages;
+    const q = searchQuery.toLowerCase();
+    return messages.filter(m => m.text?.toLowerCase().includes(q));
+  }, [messages, searchQuery]);
 
   const sendMessage = async () => {
     if (!newMessage.trim() || !token || !sharedKey || sending) return;
     setSending(true);
-    stopTyping(); // Quitar indicador de typing al enviar
+    stopTyping();
 
     try {
       const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
       const e2eEncrypted = encryptMessageE2E(newMessage.trim(), sharedKey);
 
-      // Agregar mensaje optimistamente
       const optimisticId = `optimistic-${Date.now()}`;
       const optimisticMsg: Message = {
         id: optimisticId,
@@ -194,37 +301,27 @@ export default function ConversationPage() {
         text: newMessage.trim(),
         createdAt: new Date().toISOString(),
         status: 'sent',
+        replyToId: replyTo?.id ?? null,
       };
       setMessages(prev => [...prev, optimisticMsg]);
       setNewMessage('');
+      setReplyTo(null);
+      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
 
       const res = await fetch(`/api/conversations/${conversationId}/messages`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ e2eEncrypted }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ e2eEncrypted, replyToId: replyTo?.id ?? null }),
       });
 
       if (res.ok) {
         const data = await res.json();
-        // Reemplazar mensaje optimista con el real
         setMessages(prev =>
-          prev.map(m =>
-            m.id === optimisticId
-              ? { ...m, id: data.message.id, status: 'sent' as const }
-              : m
-          )
+          prev.map(m => m.id === optimisticId ? { ...m, id: data.message.id, status: 'sent' as const } : m)
         );
       } else {
-        // Marcar como error
         setMessages(prev =>
-          prev.map(m =>
-            m.id === optimisticId
-              ? { ...m, text: `${m.text} (Error al enviar)`, error: 'send_failed' }
-              : m
-          )
+          prev.map(m => m.id === optimisticId ? { ...m, text: `${m.text} (Error al enviar)`, error: 'send_failed' } : m)
         );
       }
     } catch (err) {
@@ -233,6 +330,69 @@ export default function ConversationPage() {
       setSending(false);
     }
   };
+
+  // ── Reacciones ──────────────────────────────────────────────────────────────
+  const toggleReaction = useCallback(async (messageId: string, emoji: string) => {
+    if (!token || !user) return;
+    // Optimistic update
+    setMessages(prev => prev.map(m => {
+      if (m.id !== messageId) return m;
+      const reactions = m.reactions ? [...m.reactions] : [];
+      const idx = reactions.findIndex(r => r.emoji === emoji);
+      if (idx >= 0) {
+        const uids = reactions[idx].userIds.filter(id => id !== user.id);
+        if (uids.length === 0) reactions.splice(idx, 1);
+        else reactions[idx] = { ...reactions[idx], userIds: uids };
+      } else {
+        const existing = reactions.findIndex(r => r.emoji === emoji);
+        if (existing >= 0) reactions[existing].userIds.push(user.id);
+        else reactions.push({ emoji, userIds: [user.id] });
+      }
+      return { ...m, reactions };
+    }));
+
+    await fetch(`/api/messages/${messageId}/reactions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ emoji }),
+    });
+  }, [token, user]);
+
+  // ── Editar mensaje ──────────────────────────────────────────────────────────
+  const startEdit = useCallback((msg: Message) => {
+    setEditingId(msg.id);
+    setEditText(msg.text || '');
+  }, []);
+
+  const submitEdit = useCallback(async () => {
+    if (!editingId || !editText.trim() || !token || !sharedKey) return;
+    const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
+    const e2eEncrypted = encryptMessageE2E(editText.trim(), sharedKey);
+
+    // Optimistic
+    setMessages(prev => prev.map(m =>
+      m.id === editingId ? { ...m, text: editText.trim(), editedAt: new Date().toISOString() } : m
+    ));
+    setEditingId(null);
+    setEditText('');
+
+    await fetch(`/api/messages/${editingId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ e2eEncrypted }),
+    });
+  }, [editingId, editText, token, sharedKey]);
+
+  // ── Eliminar mensaje ────────────────────────────────────────────────────────
+  const deleteMessage = useCallback(async (messageId: string) => {
+    if (!token) return;
+    // Optimistic
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, text: undefined } : m));
+    await fetch(`/api/messages/${messageId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }, [token]);
 
   // Manejar input con indicador de typing
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -326,11 +486,57 @@ export default function ConversationPage() {
           >
             <Video className="w-6 h-6" fill="currentColor" />
           </button>
+          {/* Botón búsqueda */}
+          <button
+            onClick={() => { setSearchOpen(o => !o); setSearchQuery(''); }}
+            className="p-2 rounded-full hover:bg-[#f0f2f5] text-[#65676b] transition-colors"
+            title="Buscar en la conversación"
+          >
+            <Search className="w-5 h-5" />
+          </button>
         </div>
 
+        {/* Barra de búsqueda */}
+        {searchOpen && (
+          <div className="px-4 py-2 border-b border-[#e4e6eb] flex items-center gap-2 bg-[#f0f2f5]">
+            <Search className="w-4 h-4 text-[#65676b] flex-shrink-0" />
+            <input
+              autoFocus
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Buscar en la conversación..."
+              className="flex-1 bg-transparent text-[#050505] placeholder-[#65676b] focus:outline-none text-[14px]"
+            />
+            {searchQuery && (
+              <span className="text-[12px] text-[#65676b]">{filteredMessages.length} resultado{filteredMessages.length !== 1 ? 's' : ''}</span>
+            )}
+            <button onClick={() => { setSearchOpen(false); setSearchQuery(''); }} className="text-[#65676b] hover:text-[#050505]">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Mensajes */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-1 bg-white">
-          {messages.length === 0 && (
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto p-4 space-y-1 bg-white"
+        >
+          {/* Spinner de carga de más mensajes */}
+          {loadingMore && (
+            <div className="flex justify-center py-2">
+              <div className="w-5 h-5 border-2 border-[#0084ff] border-t-transparent rounded-full animate-spin" />
+            </div>
+          )}
+
+          {!loadingMore && hasMore && (
+            <div className="flex justify-center py-1">
+              <span className="text-[12px] text-[#65676b]">↑ Sube para ver más mensajes</span>
+            </div>
+          )}
+
+          {messages.length === 0 && !loading && (
             <div className="text-center text-[#65676b] py-12">
               <div className="w-20 h-20 bg-[#f0f2f5] rounded-full flex items-center justify-center mx-auto mb-4">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -342,40 +548,142 @@ export default function ConversationPage() {
               <p className="text-[13px] mt-1">Nadie fuera de este chat, ni siquiera Messenger, puede leerlos ni escucharlos.</p>
             </div>
           )}
-          {messages.map((msg, idx) => {
+
+          {(searchQuery ? filteredMessages : messages).map((msg, idx) => {
+            const displayList = searchQuery ? filteredMessages : messages;
             const isMe = msg.senderId === user?.id;
-            const nextMsg = messages[idx + 1];
+            const nextMsg = displayList[idx + 1];
             const isLastInGroup = !nextMsg || nextMsg.senderId !== msg.senderId;
+            const replySource = msg.replyToId ? messages.find(m => m.id === msg.replyToId) : null;
+            const isEditing = editingId === msg.id;
 
             return (
               <div
                 key={msg.id}
-                className={`flex ${isMe ? 'justify-end' : 'justify-start'} ${isLastInGroup ? 'mb-3' : 'mb-0.5'}`}
+                className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} ${isLastInGroup ? 'mb-3' : 'mb-0.5'} group`}
               >
-                <div className="flex flex-col">
-                  <div
-                    className={`max-w-[75%] px-4 py-2 ${
-                      isMe
-                        ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
-                        : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
-                    }`}
-                    style={{ wordBreak: 'break-word' }}
-                  >
-                    <p className="text-[15px] leading-tight">{msg.text || '[Mensaje cifrado]'}</p>
-                  </div>
-                  {/* Status + timestamp en mensajes propios (último del grupo) */}
-                  {isMe && isLastInGroup && (
-                    <div className="flex items-center justify-end gap-1 mt-0.5 mr-1">
-                      <span className="text-[11px] text-[#65676b]">
-                        {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                      <MessageStatus
-                        status={msg.status || 'sent'}
-                        isOwnMessage={true}
+                {/* Mensaje citado */}
+                {replySource && (
+                  <QuotedMessage
+                    text={replySource.isDeleted ? 'Mensaje eliminado' : (replySource.text || '')}
+                    senderName={replySource.senderId === user?.id ? 'Tú' : otherUsername}
+                    isMe={isMe}
+                  />
+                )}
+
+                <div className="flex items-end gap-1 max-w-[75%]">
+                  {/* Acciones (hover) — solo mensajes no eliminados */}
+                  {!msg.isDeleted && (
+                    <div className={`hidden group-hover:flex items-center gap-0.5 mb-1 ${isMe ? 'order-first' : 'order-last'}`}>
+                      {/* Responder */}
+                      <button
+                        onClick={() => setReplyTo(msg)}
+                        className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b]"
+                        title="Responder"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <polyline points="9 17 4 12 9 7" /><line x1="20" y1="12" x2="4" y2="12" />
+                        </svg>
+                      </button>
+                      {/* Reaccionar */}
+                      <button
+                        onClick={() => toggleReaction(msg.id, '👍')}
+                        className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b] text-[12px]"
+                        title="👍"
+                      >👍</button>
+                      <button
+                        onClick={() => toggleReaction(msg.id, '❤️')}
+                        className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b] text-[12px]"
+                        title="❤️"
+                      >❤️</button>
+                      <button
+                        onClick={() => toggleReaction(msg.id, '😂')}
+                        className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b] text-[12px]"
+                        title="😂"
+                      >😂</button>
+                      {/* Editar/Eliminar solo propios */}
+                      {isMe && (
+                        <>
+                          <button
+                            onClick={() => startEdit(msg)}
+                            className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b]"
+                            title="Editar"
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => deleteMessage(msg.id)}
+                            className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#e02424]"
+                            title="Eliminar"
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
+                            </svg>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Burbuja */}
+                  {isEditing ? (
+                    <div className="flex items-center gap-2 w-full">
+                      <input
+                        autoFocus
+                        value={editText}
+                        onChange={e => setEditText(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') submitEdit(); if (e.key === 'Escape') setEditingId(null); }}
+                        className="flex-1 px-3 py-1.5 rounded-[20px] border border-[#0084ff] text-[15px] text-[#050505] focus:outline-none bg-white"
                       />
+                      <button onClick={submitEdit} className="text-[#0084ff] text-[13px] font-medium">Guardar</button>
+                      <button onClick={() => setEditingId(null)} className="text-[#65676b] text-[13px]">Cancelar</button>
+                    </div>
+                  ) : (
+                    <div
+                      className={`px-4 py-2 ${
+                        msg.isDeleted
+                          ? 'bg-transparent border border-[#e4e6eb] text-[#65676b] italic rounded-[20px]'
+                          : isMe
+                            ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
+                            : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
+                      }`}
+                      style={{ wordBreak: 'break-word' }}
+                    >
+                      {msg.isDeleted ? (
+                        <p className="text-[14px]">Mensaje eliminado</p>
+                      ) : (
+                        <>
+                          <p className="text-[15px] leading-tight">{msg.text || '[Mensaje cifrado]'}</p>
+                          {msg.editedAt && (
+                            <span className={`text-[11px] ${isMe ? 'text-blue-100' : 'text-[#65676b]'}`}> · editado</span>
+                          )}
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
+
+                {/* Reacciones */}
+                {(msg.reactions?.length ?? 0) > 0 && (
+                  <MessageReactions
+                    reactions={msg.reactions!}
+                    currentUserId={user?.id || ''}
+                    onToggle={(emoji) => toggleReaction(msg.id, emoji)}
+                    isMe={isMe}
+                  />
+                )}
+
+                {/* Status + timestamp (último del grupo, mensajes propios) */}
+                {isMe && isLastInGroup && !isEditing && (
+                  <div className="flex items-center justify-end gap-1 mt-0.5 mr-1">
+                    <span className="text-[11px] text-[#65676b]">
+                      {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    <MessageStatus status={msg.status || 'sent'} isOwnMessage={true} />
+                  </div>
+                )}
               </div>
             );
           })}
@@ -387,14 +695,16 @@ export default function ConversationPage() {
         </div>
 
         {/* Input de mensaje */}
-        <div className="p-3 bg-white">
+        <div className="p-3 bg-white border-t border-[#e4e6eb]">
+          {/* Preview de respuesta */}
+          {replyTo && (
+            <ReplyPreview
+              text={replyTo.isDeleted ? 'Mensaje eliminado' : (replyTo.text || '')}
+              senderName={replyTo.senderId === user?.id ? 'Tú' : otherUsername}
+              onCancel={() => setReplyTo(null)}
+            />
+          )}
           <div className="flex items-end gap-2">
-            <button className="p-2 text-[#0084ff] hover:bg-[#f0f2f5] rounded-full transition-colors flex-shrink-0">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-            </button>
             <div className="flex-1 bg-[#f0f2f5] rounded-3xl flex items-center pr-2">
               <input
                 type="text"

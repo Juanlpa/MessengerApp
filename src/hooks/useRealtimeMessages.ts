@@ -28,8 +28,11 @@ interface UseRealtimeMessagesOptions {
     text: string;
     e2e: { ciphertext: string; iv: string; mac: string } | null;
     createdAt: string;
+    replyToId?: string | null;
   }) => void;
   onMessageStatusUpdate?: (messageId: string, status: string) => void;
+  onMessageUpdated?: (messageId: string, patch: { text?: string; isDeleted?: boolean; editedAt?: string | null }) => void;
+  onReactionsUpdated?: (messageId: string) => void;
 }
 
 /**
@@ -49,6 +52,8 @@ export function useRealtimeMessages({
   sharedKey,
   onNewMessage,
   onMessageStatusUpdate,
+  onMessageUpdated,
+  onReactionsUpdated,
 }: UseRealtimeMessagesOptions) {
   const supabaseRef = useRef(getRealtimeClient());
 
@@ -84,7 +89,7 @@ export function useRealtimeMessages({
 
             if (res.ok) {
               const data = await res.json();
-              
+
               // Descifrar Capa 1 (E2E) localmente
               if (data.message?.e2e && sharedKey) {
                 const { decryptMessageE2E } = await import('@/lib/crypto/message-crypto');
@@ -96,6 +101,7 @@ export function useRealtimeMessages({
                     text,
                     e2e: data.message.e2e,
                     createdAt: data.message.createdAt,
+                    replyToId: data.message.replyToId ?? null,
                   });
                 } catch {
                   onNewMessage({
@@ -104,6 +110,7 @@ export function useRealtimeMessages({
                     text: '[Error al descifrar]',
                     e2e: null,
                     createdAt: data.message.createdAt,
+                    replyToId: data.message.replyToId ?? null,
                   });
                 }
               }
@@ -126,6 +133,55 @@ export function useRealtimeMessages({
           }
         }
       )
+      // Escuchar UPDATEs de mensajes (ediciones y eliminaciones)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        async (payload) => {
+          const updated = payload.new as {
+            id: string;
+            is_deleted: boolean;
+            edited_at: string | null;
+            server_ciphertext: string;
+            server_iv: string;
+            server_mac_tag: string;
+          };
+
+          if (!onMessageUpdated) return;
+
+          if (updated.is_deleted) {
+            onMessageUpdated(updated.id, { isDeleted: true });
+            return;
+          }
+
+          // Edición: re-descifrar via API
+          try {
+            const res = await fetch(
+              `/api/conversations/${conversationId}/messages/single?messageId=${updated.id}`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (res.ok && sharedKey) {
+              const data = await res.json();
+              if (data.message?.e2e) {
+                const { decryptMessageE2E } = await import('@/lib/crypto/message-crypto');
+                try {
+                  const text = decryptMessageE2E(data.message.e2e, sharedKey);
+                  onMessageUpdated(updated.id, { text, editedAt: updated.edited_at });
+                } catch {
+                  onMessageUpdated(updated.id, { text: '[Error al descifrar]', editedAt: updated.edited_at });
+                }
+              }
+            }
+          } catch (err) {
+            console.error('Error processing message update:', err);
+          }
+        }
+      )
       .subscribe();
 
     // Canal para actualizaciones de status (delivered/read)
@@ -133,11 +189,7 @@ export function useRealtimeMessages({
       .channel(`status:${conversationId}`)
       .on(
         'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'message_status',
-        },
+        { event: '*', schema: 'public', table: 'message_status' },
         (payload) => {
           const statusData = payload.new as { message_id: string; status: string; user_id: string };
           if (statusData.user_id !== userId && onMessageStatusUpdate) {
@@ -147,11 +199,27 @@ export function useRealtimeMessages({
       )
       .subscribe();
 
+    // Canal para reacciones
+    const reactionsChannel = supabase
+      .channel(`reactions:${conversationId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'message_reactions' },
+        (payload) => {
+          const row = (payload.new || payload.old) as { message_id: string };
+          if (row?.message_id && onReactionsUpdated) {
+            onReactionsUpdated(row.message_id);
+          }
+        }
+      )
+      .subscribe();
+
     return () => {
       supabase.removeChannel(channel);
       supabase.removeChannel(statusChannel);
+      supabase.removeChannel(reactionsChannel);
     };
-  }, [conversationId, userId, token, sharedKey, onNewMessage, onMessageStatusUpdate]);
+  }, [conversationId, userId, token, sharedKey, onNewMessage, onMessageStatusUpdate, onMessageUpdated, onReactionsUpdated]);
 }
 
 /**
