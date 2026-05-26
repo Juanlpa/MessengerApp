@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import { useParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import Link from 'next/link';
-import { Video, Phone, Users, Search, X } from 'lucide-react';
+import { Video, Users, Search, X } from 'lucide-react';
 import { useWebRTC } from '@/hooks/useWebRTC';
 import { useRealtimeMessages, useMarkAsRead, type BroadcastPayload } from '@/hooks/useRealtimeMessages';
 import { useTypingIndicator } from '@/hooks/useTypingIndicator';
@@ -150,13 +150,10 @@ export default function ConversationPage() {
     acceptCall,
     rejectCall,
     endCall,
-    inviteToCall,
     toggleAudio,
     toggleVideo,
     isAudioMuted,
     isVideoMuted,
-    isAudioOnly,
-    isE2EMedia,
   } = useWebRTC(
     conversationId,
     user?.id || '',
@@ -195,12 +192,6 @@ export default function ConversationPage() {
       stopPipeline();
     }
   }, [callState, groupCallState, stopPipeline]);
-
-  // Invitar a tercer participante (convierte 1-a-1 en grupal)
-  const handleAddParticipant = useCallback(async (contactId: string, contactName: string) => {
-    await inviteToCall(contactId, contactName);
-    await joinGroupCall();
-  }, [inviteToCall, joinGroupCall]);
 
   // Handlers para visor de imágenes y adjuntos
   const handleViewImage = useCallback((id: string) => {
@@ -242,7 +233,10 @@ export default function ConversationPage() {
   }) => {
     setMessages(prev => {
       if (prev.some(m => m.id === msg.id)) return prev;
-      return [...prev, { ...msg, isDeleted: false, status: 'delivered' as const }];
+      const validType = (['text', 'voice', 'image', 'file'] as const).includes(msg.messageType as any)
+        ? (msg.messageType as 'text' | 'voice' | 'image' | 'file')
+        : 'text';
+      return [...prev, { ...msg, messageType: validType, isDeleted: false, status: 'delivered' as const }];
     });
   }, []);
 
@@ -500,7 +494,7 @@ export default function ConversationPage() {
     if (!result) return null;
 
     const type = file.type.startsWith('image/') ? 'image' : 'file';
-    const content = `[${type}:${result.attachmentId}] ${file.name}`;
+    const content = `[${type}:${result.id}] ${file.name}`;
     
     try {
       const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
@@ -515,7 +509,7 @@ export default function ConversationPage() {
         status: 'sent' as const,
         messageType: type,
         attachment: {
-          id: result.attachmentId,
+          id: result.id,
           filename: file.name,
           mimeType: file.type,
           sizeBytes: file.size,
@@ -526,7 +520,7 @@ export default function ConversationPage() {
       const res = await fetch(`/api/conversations/${conversationId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ e2eEncrypted, messageType: type, attachmentId: result.attachmentId }),
+        body: JSON.stringify({ e2eEncrypted, messageType: type, attachmentId: result.id }),
       });
 
       if (res.ok) {
@@ -541,7 +535,7 @@ export default function ConversationPage() {
           createdAt: data.message.created_at ?? new Date().toISOString(),
           messageType: type,
           attachment: {
-            id: result.attachmentId,
+            id: result.id,
             filename: file.name,
             mimeType: file.type,
             sizeBytes: file.size,
@@ -552,6 +546,7 @@ export default function ConversationPage() {
     } catch (err) {
       console.error('File send error:', err);
     }
+    return null;
   }, [conversationId, token, sharedKey, uploadAttachment, user]);
 
   // ── Reacciones ──────────────────────────────────────────────────────────────
@@ -663,7 +658,7 @@ export default function ConversationPage() {
 
       <GroupCallModal
         isOpen={groupCallState !== 'idle'}
-        callState={groupCallState}
+        groupName={groupName}
         participants={groupParticipants}
         localVideoRef={groupLocalVideoRef}
         isAudioMuted={groupAudioMuted}
@@ -671,15 +666,20 @@ export default function ConversationPage() {
         onLeave={leaveGroupCall}
         onToggleAudio={toggleGroupAudio}
         onToggleVideo={toggleGroupVideo}
+        activeFilter={activeFilter}
+        activeBackground={activeBackground}
+        onFilterChange={setFilter}
+        onBackgroundChange={setBackground}
       />
 
       {/* Panel de filtros de video si hay llamada activa */}
-      {(callState === 'active' || groupCallState === 'active') && (
+      {(callState === 'connected' || groupCallState === 'connected') && (
         <VideoFilterPanel
           activeFilter={activeFilter}
           activeBackground={activeBackground}
-          onSelectFilter={setFilter}
-          onSelectBackground={setBackground}
+          onFilterChange={setFilter}
+          onBackgroundChange={setBackground}
+          onClose={stopPipeline}
         />
       )}
 
@@ -731,7 +731,7 @@ export default function ConversationPage() {
             <p className="text-[#050505] font-semibold text-[15px] truncate">{isGroup ? groupName : otherUsername}</p>
             <div className="flex items-center gap-1 text-[13px] truncate">
               {isGroup ? (
-                <span className="text-[#65676b]">{groupParticipants.length} miembros</span>
+                <span className="text-[#65676b]">{groupParticipants.size} miembros</span>
               ) : isUserOnline(otherUserId) ? (
                 <span className="text-[#31A24C]">En línea</span>
               ) : (
@@ -747,18 +747,16 @@ export default function ConversationPage() {
           </div>
           {!isGroup && (
             <button
-              onClick={initiateCall}
+              onClick={() => initiateCall()}
               className="p-2 rounded-full hover:bg-[#f0f2f5] text-[#0084ff] transition-colors"
               title="Iniciar videollamada cifrada"
             >
               <Video className="w-6 h-6" fill="currentColor" />
             </button>
           )}
-          {isGroup && callState === 'active' && (
+          {isGroup && callState === 'connected' && (
             <button
-              onClick={() => {
-                // Agregar miembro a la llamada
-              }}
+              onClick={() => {/* Agregar miembro a la llamada */}}
               className="p-2 rounded-full hover:bg-[#f0f2f5] text-[#0084ff] transition-colors"
               title="Agregar miembro"
             >
