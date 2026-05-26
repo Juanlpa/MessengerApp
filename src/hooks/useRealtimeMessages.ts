@@ -4,31 +4,6 @@ import { useEffect, useRef, useCallback } from 'react';
 import { decryptMessageE2E } from '@/lib/crypto/message-crypto';
 import { supabase } from '@/lib/supabase/client';
 
-interface UseRealtimeMessagesOptions {
-  conversationId: string;
-  userId: string;
-  token: string;
-  sharedKey: Uint8Array | null;
-  onNewMessage: (message: {
-    id: string;
-    senderId: string;
-    text: string;
-    e2e: { ciphertext: string; iv: string; mac: string } | null;
-    createdAt: string;
-    messageType?: string;
-    attachment?: {
-      id: string;
-      filename: string;
-      mimeType: string;
-      sizeBytes: number;
-      attachmentType: 'image' | 'voice' | 'file';
-      durationMs?: number | null;
-      waveformData?: number[];
-    } | null;
-  }) => void;
-  onMessageStatusUpdate?: (messageId: string, status: string) => void;
-}
-
 export interface BroadcastPayload {
   id: string;
   senderId: string;
@@ -46,6 +21,34 @@ export interface BroadcastPayload {
   } | null;
 }
 
+interface UseRealtimeMessagesOptions {
+  conversationId: string;
+  userId: string;
+  token: string;
+  sharedKey: Uint8Array | null;
+  onNewMessage: (message: {
+    id: string;
+    senderId: string;
+    text: string;
+    e2e: { ciphertext: string; iv: string; mac: string } | null;
+    createdAt: string;
+    replyToId?: string | null;
+    messageType?: string;
+    attachment?: {
+      id: string;
+      filename: string;
+      mimeType: string;
+      sizeBytes: number;
+      attachmentType: 'image' | 'voice' | 'file';
+      durationMs?: number | null;
+      waveformData?: number[];
+    } | null;
+  }) => void;
+  onMessageStatusUpdate?: (messageId: string, status: string) => void;
+  onMessageUpdated?: (messageId: string, patch: { text?: string; isDeleted?: boolean; editedAt?: string | null }) => void;
+  onReactionsUpdated?: (messageId: string) => void;
+}
+
 export function useRealtimeMessages({
   conversationId,
   userId,
@@ -53,6 +56,8 @@ export function useRealtimeMessages({
   sharedKey,
   onNewMessage,
   onMessageStatusUpdate,
+  onMessageUpdated,
+  onReactionsUpdated,
 }: UseRealtimeMessagesOptions) {
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const deliveryQueueRef = useRef<string[]>([]);
@@ -63,25 +68,29 @@ export function useRealtimeMessages({
   sharedKeyRef.current = sharedKey;
   const tokenRef = useRef(token);
   tokenRef.current = token;
+  
   const onNewMessageRef = useRef(onNewMessage);
   onNewMessageRef.current = onNewMessage;
   const onMessageStatusUpdateRef = useRef(onMessageStatusUpdate);
   onMessageStatusUpdateRef.current = onMessageStatusUpdate;
+  const onMessageUpdatedRef = useRef(onMessageUpdated);
+  onMessageUpdatedRef.current = onMessageUpdated;
+  const onReactionsUpdatedRef = useRef(onReactionsUpdated);
+  onReactionsUpdatedRef.current = onReactionsUpdated;
 
   useEffect(() => {
     if (!conversationId || !token) return;
 
-    // Limpiar canales previos con el mismo nombre (evita error "after subscribe" con cliente compartido)
-    const topic = `realtime:messages:${conversationId}`;
-    const statusTopic = `realtime:status:${conversationId}`;
+    // Limpiar canales previos con el mismo nombre
+    const topic = `realtime:conv:${conversationId}`;
     supabase.getChannels()
-      .filter(ch => ch.topic === topic || ch.topic === statusTopic)
+      .filter(ch => ch.topic === topic || ch.topic.includes(conversationId))
       .forEach(ch => supabase.removeChannel(ch));
 
-    // Canal de mensajes — escucha Broadcast en lugar de postgres_changes
-    // (postgres_changes requiere Supabase Auth; Broadcast funciona con cualquier cliente)
+    // Canal único consolidador 'conv:${conversationId}'
     const channel = supabase
-      .channel(`messages:${conversationId}`)
+      .channel(`conv:${conversationId}`)
+      // 1. Escuchar Broadcast para nuevos mensajes (E2E)
       .on('broadcast', { event: 'new_message' }, ({ payload }: { payload: BroadcastPayload }) => {
         if (payload.senderId === userId) return;
 
@@ -124,13 +133,55 @@ export function useRealtimeMessages({
           }, 200);
         }
       })
-      .subscribe();
+      // 2. Escuchar UPDATEs de mensajes (ediciones y eliminaciones soft-delete)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        async (payload) => {
+          const updated = payload.new as {
+            id: string;
+            is_deleted: boolean;
+            edited_at: string | null;
+            server_ciphertext: string;
+            server_iv: string;
+            server_mac_tag: string;
+          };
 
-    channelRef.current = channel;
+          if (!onMessageUpdatedRef.current) return;
 
-    // Canal de estado (delivered/read) — sigue con postgres_changes para actualizaciones de estado propias
-    const statusChannel = supabase
-      .channel(`status:${conversationId}`)
+          if (updated.is_deleted) {
+            onMessageUpdatedRef.current(updated.id, { isDeleted: true });
+            return;
+          }
+
+          // Edición: re-descifrar via API
+          try {
+            const res = await fetch(
+              `/api/conversations/${conversationId}/messages/single?messageId=${updated.id}`,
+              { headers: { Authorization: `Bearer ${tokenRef.current}` } }
+            );
+            if (res.ok && sharedKeyRef.current) {
+              const data = await res.json();
+              if (data.message?.e2e) {
+                try {
+                  const text = decryptMessageE2E(data.message.e2e, sharedKeyRef.current);
+                  onMessageUpdatedRef.current(updated.id, { text, editedAt: updated.edited_at });
+                } catch {
+                  onMessageUpdatedRef.current(updated.id, { text: '[Error al descifrar]', editedAt: updated.edited_at });
+                }
+              }
+            }
+          } catch (err) {
+            console.error('Error processing message update:', err);
+          }
+        }
+      )
+      // 3. Escuchar actualizaciones de status (delivered/read)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'message_status' },
@@ -141,11 +192,23 @@ export function useRealtimeMessages({
           }
         }
       )
+      // 4. Escuchar reacciones
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'message_reactions' },
+        (payload) => {
+          const row = (payload.new || payload.old) as { message_id: string };
+          if (row?.message_id && onReactionsUpdatedRef.current) {
+            onReactionsUpdatedRef.current(row.message_id);
+          }
+        }
+      )
       .subscribe();
+
+    channelRef.current = channel;
 
     return () => {
       supabase.removeChannel(channel);
-      supabase.removeChannel(statusChannel);
       channelRef.current = null;
       if (deliveryTimerRef.current) {
         clearTimeout(deliveryTimerRef.current);
