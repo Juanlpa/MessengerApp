@@ -63,9 +63,9 @@ export function useRealtimeMessages({
 
     const supabase = supabaseRef.current;
 
-    // Canal para recibir mensajes nuevos (Postgres Changes)
+    // Un solo canal con todos los listeners — evita múltiples WebSockets
     const channel = supabase
-      .channel(`messages:${conversationId}`)
+      .channel(`conv:${conversationId}`)
       .on(
         'postgres_changes',
         {
@@ -182,11 +182,7 @@ export function useRealtimeMessages({
           }
         }
       )
-      .subscribe();
-
-    // Canal para actualizaciones de status (delivered/read)
-    const statusChannel = supabase
-      .channel(`status:${conversationId}`)
+      // Actualizaciones de status (delivered/read) — en el mismo canal
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'message_status' },
@@ -197,11 +193,7 @@ export function useRealtimeMessages({
           }
         }
       )
-      .subscribe();
-
-    // Canal para reacciones
-    const reactionsChannel = supabase
-      .channel(`reactions:${conversationId}`)
+      // Reacciones — en el mismo canal
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'message_reactions' },
@@ -216,8 +208,6 @@ export function useRealtimeMessages({
 
     return () => {
       supabase.removeChannel(channel);
-      supabase.removeChannel(statusChannel);
-      supabase.removeChannel(reactionsChannel);
     };
   }, [conversationId, userId, token, sharedKey, onNewMessage, onMessageStatusUpdate, onMessageUpdated, onReactionsUpdated]);
 }

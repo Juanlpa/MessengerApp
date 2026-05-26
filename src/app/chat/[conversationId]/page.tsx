@@ -1,22 +1,26 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { useParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import Link from 'next/link';
 import { Video, Search, X } from 'lucide-react';
 import { useWebRTC } from '@/hooks/useWebRTC';
-import { CallModal } from '@/components/chat/CallModal';
 import { useRealtimeMessages, useMarkAsRead } from '@/hooks/useRealtimeMessages';
+
+// Lazy: modales pesados fuera del bundle inicial
+const CallModal = dynamic(
+  () => import('@/components/chat/CallModal').then(m => ({ default: m.CallModal })),
+  { ssr: false }
+);
 import { useTypingIndicator } from '@/hooks/useTypingIndicator';
 import { usePresence } from '@/hooks/usePresence';
-import { MessageStatus } from '@/components/chat/MessageStatus';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
 import { OnlineIndicator } from '@/components/chat/OnlineIndicator';
-import { MessageReactions } from '@/components/chat/MessageReactions';
-import { QuotedMessage } from '@/components/chat/QuotedMessage';
 import { ReplyPreview } from '@/components/chat/ReplyPreview';
 import { ForwardMessageModal } from '@/components/chat/ForwardMessageModal';
+import { MessageTile } from '@/components/chat/MessageTile';
 
 const MESSAGES_PER_PAGE = 30;
 
@@ -579,147 +583,28 @@ export default function ConversationPage() {
             const isMe = msg.senderId === user?.id;
             const nextMsg = displayList[idx + 1];
             const isLastInGroup = !nextMsg || nextMsg.senderId !== msg.senderId;
-            const replySource = msg.replyToId ? messages.find(m => m.id === msg.replyToId) : null;
-            const isEditing = editingId === msg.id;
+            const replySource = msg.replyToId ? messages.find(m => m.id === msg.replyToId) ?? null : null;
 
             return (
-              <div
+              <MessageTile
                 key={msg.id}
-                className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} ${isLastInGroup ? 'mb-3' : 'mb-0.5'} group`}
-              >
-                {/* Mensaje citado */}
-                {replySource && (
-                  <QuotedMessage
-                    text={replySource.isDeleted ? 'Mensaje eliminado' : (replySource.text || '')}
-                    senderName={replySource.senderId === user?.id ? 'Tú' : otherUsername}
-                    isMe={isMe}
-                  />
-                )}
-
-                <div className="flex items-end gap-1 max-w-[75%]">
-                  {/* Acciones (hover) — solo mensajes no eliminados */}
-                  {!msg.isDeleted && (
-                    <div className={`hidden group-hover:flex items-center gap-0.5 mb-1 ${isMe ? 'order-first' : 'order-last'}`}>
-                      {/* Responder */}
-                      <button
-                        onClick={() => setReplyTo(msg)}
-                        className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b]"
-                        title="Responder"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <polyline points="9 17 4 12 9 7" /><line x1="20" y1="12" x2="4" y2="12" />
-                        </svg>
-                      </button>
-                      {/* Reenviar */}
-                      <button
-                        onClick={() => setForwardingMessage(msg)}
-                        className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b]"
-                        title="Reenviar"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>
-                        </svg>
-                      </button>
-                      {/* Reaccionar */}
-                      <button
-                        onClick={() => toggleReaction(msg.id, '👍')}
-                        className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b] text-[12px]"
-                        title="👍"
-                      >👍</button>
-                      <button
-                        onClick={() => toggleReaction(msg.id, '❤️')}
-                        className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b] text-[12px]"
-                        title="❤️"
-                      >❤️</button>
-                      <button
-                        onClick={() => toggleReaction(msg.id, '😂')}
-                        className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b] text-[12px]"
-                        title="😂"
-                      >😂</button>
-                      {/* Editar/Eliminar solo propios */}
-                      {isMe && (
-                        <>
-                          <button
-                            onClick={() => startEdit(msg)}
-                            className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b]"
-                            title="Editar"
-                          >
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                            </svg>
-                          </button>
-                          <button
-                            onClick={() => deleteMessage(msg.id)}
-                            className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#e02424]"
-                            title="Eliminar"
-                          >
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
-                            </svg>
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Burbuja */}
-                  {isEditing ? (
-                    <div className="flex items-center gap-2 w-full">
-                      <input
-                        autoFocus
-                        value={editText}
-                        onChange={e => setEditText(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') submitEdit(); if (e.key === 'Escape') setEditingId(null); }}
-                        className="flex-1 px-3 py-1.5 rounded-[20px] border border-[#0084ff] text-[15px] text-[#050505] focus:outline-none bg-white"
-                      />
-                      <button onClick={submitEdit} className="text-[#0084ff] text-[13px] font-medium">Guardar</button>
-                      <button onClick={() => setEditingId(null)} className="text-[#65676b] text-[13px]">Cancelar</button>
-                    </div>
-                  ) : (
-                    <div
-                      className={`px-4 py-2 ${
-                        msg.isDeleted
-                          ? 'bg-transparent border border-[#e4e6eb] text-[#65676b] italic rounded-[20px]'
-                          : isMe
-                            ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
-                            : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
-                      }`}
-                      style={{ wordBreak: 'break-word' }}
-                    >
-                      {msg.isDeleted ? (
-                        <p className="text-[14px]">Mensaje eliminado</p>
-                      ) : (
-                        <>
-                          <p className="text-[15px] leading-tight">{msg.text || '[Mensaje cifrado]'}</p>
-                          {msg.editedAt && (
-                            <span className={`text-[11px] ${isMe ? 'text-blue-100' : 'text-[#65676b]'}`}> · editado</span>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Reacciones */}
-                {(msg.reactions?.length ?? 0) > 0 && (
-                  <MessageReactions
-                    reactions={msg.reactions!}
-                    currentUserId={user?.id || ''}
-                    onToggle={(emoji) => toggleReaction(msg.id, emoji)}
-                    isMe={isMe}
-                  />
-                )}
-
-                {/* Status + timestamp (último del grupo, mensajes propios) */}
-                {isMe && isLastInGroup && !isEditing && (
-                  <div className="flex items-center justify-end gap-1 mt-0.5 mr-1">
-                    <span className="text-[11px] text-[#65676b]">
-                      {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                    <MessageStatus status={msg.status || 'sent'} isOwnMessage={true} />
-                  </div>
-                )}
-              </div>
+                msg={msg}
+                isMe={isMe}
+                isLastInGroup={isLastInGroup}
+                replySource={replySource}
+                otherUsername={otherUsername}
+                currentUserId={user?.id || ''}
+                isEditing={editingId === msg.id}
+                editText={editText}
+                onSetReplyTo={setReplyTo}
+                onForward={setForwardingMessage}
+                onToggleReaction={toggleReaction}
+                onStartEdit={startEdit}
+                onSubmitEdit={submitEdit}
+                onSetEditText={setEditText}
+                onCancelEdit={() => setEditingId(null)}
+                onDeleteMessage={deleteMessage}
+              />
             );
           })}
 
