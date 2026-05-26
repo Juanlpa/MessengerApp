@@ -3,13 +3,23 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
+import { Sidebar } from '@/components/layout/Sidebar';
+import { useGlobalCallListener } from '@/hooks/useGlobalCallListener';
+import { IncomingCallBanner } from '@/components/chat/IncomingCallBanner';
+import { usePushNotifications } from '@/hooks/usePushNotifications';
+
+function GlobalCallListenerWrapper({ userId, children }: { userId: string; children: React.ReactNode }) {
+  useGlobalCallListener(userId);
+  usePushNotifications();
+  return <>{children}</>;
+}
 
 export default function ChatLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { user, isLoading } = useAuthStore();
+  const user = useAuthStore(s => s.user);
+  const isLoading = useAuthStore(s => s.isLoading);
 
   useEffect(() => {
-    // Restaurar sesión
     const token = localStorage.getItem('auth_token');
     const savedUser = localStorage.getItem('auth_user');
     if (token && savedUser) {
@@ -37,8 +47,14 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
   if (!user) return null;
 
   return (
-    <div className="h-screen bg-white flex text-[#050505]">
-      {children}
-    </div>
+    <GlobalCallListenerWrapper userId={user.id}>
+      <div className="h-screen overflow-hidden bg-white flex text-[#050505]">
+        <IncomingCallBanner />
+        <Sidebar />
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {children}
+        </div>
+      </div>
+    </GlobalCallListenerWrapper>
   );
 }
