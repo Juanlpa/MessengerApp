@@ -209,11 +209,15 @@ export default function ConversationPage() {
     clearError: clearAttachError,
   } = useAttachments(conversationId, token || '', sharedKey);
 
-  // Limpiar filtros de video al colgar
+  // Limpiar filtros de video al colgar o al desmontar el componente
   useEffect(() => {
-    if (callState === 'idle' && groupCallState === 'idle') {
+    const isCallActive = callState === 'connected' || callState === 'calling' || callState === 'receiving' || groupCallState === 'connected';
+    if (!isCallActive) {
       stopPipeline();
     }
+    return () => {
+      stopPipeline();
+    };
   }, [callState, groupCallState, stopPipeline]);
 
   // Invitar a tercer participante (convierte 1-a-1 en grupal)

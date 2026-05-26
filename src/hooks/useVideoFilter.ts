@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { type FilterId, applyColorFilter } from '@/lib/filters/canvas-filters';
 
 export type { FilterId };
@@ -105,6 +105,12 @@ export function useVideoFilter() {
     hiddenVideo.play().catch(() => {});
 
     return processedStream;
+  }, [stopPipeline]);
+
+  useEffect(() => {
+    return () => {
+      stopPipeline();
+    };
   }, [stopPipeline]);
 
   return {
