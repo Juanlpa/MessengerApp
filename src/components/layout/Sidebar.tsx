@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import Link from 'next/link';
 import { usePresence } from '@/hooks/usePresence';
@@ -20,6 +20,7 @@ export function Sidebar() {
   const user = useAuthStore(s => s.user);
   const token = useAuthStore(s => s.token);
   const pathname = usePathname();
+  const router = useRouter();
   const activeConversationId = pathname?.startsWith('/chat/')
     ? pathname.split('/chat/')[1]
     : null;
@@ -47,14 +48,15 @@ export function Sidebar() {
     if (!token || !user) return;
     setCreating(true);
     try {
-      const { generateDHKeyPair } = await import('@/lib/crypto/dh');
+      const { generateDHKeyPairAsync } = await import('@/workers/dh-worker-client');
       const { deriveSharedKey, encryptSharedKeyForStorage } = await import('@/lib/crypto/key-exchange');
       const { pbkdf2 } = await import('@/lib/crypto/pbkdf2');
 
-      const myKeyPair = generateDHKeyPair();
+      const myKeyPair = await generateDHKeyPairAsync();
       const sharedKey = deriveSharedKey(myKeyPair.privateKey, otherUser.dh_public_key);
 
-      const myStorageKey = pbkdf2(user.id, 'storage-salt', 1000, 32);
+      // Leer storageKey cacheado del store; solo recalcular el del otro usuario
+      const myStorageKey = useAuthStore.getState().storageKey || pbkdf2(user.id, 'storage-salt', 1000, 32);
       const otherStorageKey = pbkdf2(otherUser.id, 'storage-salt', 1000, 32);
 
       const myEncrypted = encryptSharedKeyForStorage(sharedKey, myStorageKey);
@@ -76,7 +78,7 @@ export function Sidebar() {
         setSearchQuery('');
         setSearchResults([]);
         await reload();
-        window.location.href = `/chat/${data.conversationId}`;
+        router.push(`/chat/${data.conversationId}`);
       }
     } catch (err) {
       console.error('Failed to create conversation:', err);

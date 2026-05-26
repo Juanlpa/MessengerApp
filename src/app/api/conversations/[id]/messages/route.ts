@@ -10,6 +10,7 @@ export const dynamic = 'force-dynamic';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { getUserFromRequest } from '@/lib/auth/get-user';
 import { encryptMessageAtRest, decryptMessageAtRest, getServerMasterKey } from '@/lib/crypto/message-crypto';
+import { sendPushNotification, type PushSubscription, type PushPayload } from '@/lib/push/web-push';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -197,8 +198,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: 'Failed to send message' }, { status: 500 });
     }
 
-    // Fire-and-forget push notifications to other participants
-    triggerPushForOtherParticipants(supabase, conversationId, user.sub, request).catch(() => {});
+    // Fire-and-forget push notifications to other participants (inline, sin self-fetch)
+    pushToOtherParticipants(supabase, conversationId, user.sub).catch(() => {});
 
     return NextResponse.json({ message }, { status: 201 });
   } catch (err) {
@@ -207,20 +208,26 @@ export async function POST(request: NextRequest, context: RouteContext) {
   }
 }
 
-async function triggerPushForOtherParticipants(
+/**
+ * Envía push notifications directamente a los otros participantes.
+ * Anteriormente esto hacía un fetch() a /api/notifications/send (self-fetch),
+ * ahora se ejecuta inline para evitar el round-trip HTTP innecesario.
+ */
+async function pushToOtherParticipants(
   supabase: ReturnType<typeof import('@/lib/supabase/admin').getSupabaseAdmin>,
   conversationId: string,
-  senderId: string,
-  request: NextRequest
+  senderId: string
 ) {
+  // 1. Obtener otros participantes con su muted_until
   const { data: others } = await supabase
     .from('conversation_participants')
-    .select('user_id')
+    .select('user_id, muted_until')
     .eq('conversation_id', conversationId)
     .neq('user_id', senderId);
 
   if (!others || others.length === 0) return;
 
+  // 2. Obtener nombre del remitente
   const { data: senderData } = await supabase
     .from('users')
     .select('username')
@@ -228,24 +235,78 @@ async function triggerPushForOtherParticipants(
     .single();
 
   const senderName = senderData?.username || 'Alguien';
-  const baseUrl = request.nextUrl.origin;
+
+  // 3. Para cada participante no silenciado, buscar suscripciones y enviar
 
   await Promise.allSettled(
-    others.map((p: { user_id: string }) =>
-      fetch(`${baseUrl}/api/notifications/send`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: request.headers.get('Authorization') || '',
-        },
-        body: JSON.stringify({
-          userId: p.user_id,
-          title: senderName,
-          body: 'Nuevo mensaje',
-          conversationId,
-          type: 'message',
-        }),
-      })
-    )
+    (others as Array<{ user_id: string; muted_until: string | null }>).map(async (p) => {
+      // Respetar muted_until
+      if (p.muted_until && new Date(p.muted_until) > new Date()) return;
+
+      const { data: subscriptions } = await supabase
+        .from('push_subscriptions')
+        .select('endpoint, p256dh, auth')
+        .eq('user_id', p.user_id);
+
+      if (!subscriptions || subscriptions.length === 0) return;
+
+      const payload = {
+        title: senderName,
+        body: 'Nuevo mensaje',
+        conversationId,
+        type: 'message' as const,
+      };
+
+      const expiredEndpoints: string[] = [];
+
+      await Promise.allSettled(
+        (subscriptions as PushSubscription[]).map(async (sub) => {
+          try {
+            await sendWithRetry(sub, payload);
+          } catch (err: unknown) {
+            const status = (err as { statusCode?: number }).statusCode;
+            if (status === 404 || status === 410) {
+              expiredEndpoints.push(sub.endpoint);
+            }
+          }
+        })
+      );
+
+      // Limpiar suscripciones expiradas
+      if (expiredEndpoints.length > 0) {
+        await supabase
+          .from('push_subscriptions')
+          .delete()
+          .eq('user_id', p.user_id)
+          .in('endpoint', expiredEndpoints);
+      }
+    })
   );
+}
+
+/**
+ * Reintenta enviar una push notification hasta maxAttempts veces con backoff exponencial.
+ * Errores definitivos (404/410) se relanzán inmediatamente sin reintentar.
+ */
+async function sendWithRetry(
+  sub: PushSubscription,
+  payload: PushPayload,
+  maxAttempts = 3
+): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await sendPushNotification(sub, payload);
+      return;
+    } catch (err: unknown) {
+      const status = (err as { statusCode?: number }).statusCode;
+      // Suscripción expirada o inválida: no reintentar
+      if (status === 404 || status === 410) throw err;
+      lastErr = err;
+      if (attempt < maxAttempts) {
+        await new Promise(r => setTimeout(r, 500 * attempt)); // 500ms, 1000ms
+      }
+    }
+  }
+  throw lastErr;
 }

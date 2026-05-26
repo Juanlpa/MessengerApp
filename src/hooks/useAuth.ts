@@ -7,6 +7,7 @@
 import { useCallback, useEffect } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { prepareRegistration, prepareLogin } from '@/lib/auth/client-auth';
+import { pbkdf2 } from '@/lib/crypto/pbkdf2';
 
 export function useAuth() {
   const { user, token, isLoading, setAuth, setKeys, logout, setLoading } = useAuthStore();
@@ -32,8 +33,8 @@ export function useAuth() {
     username: string,
     password: string
   ) => {
-    // Cripto del lado del cliente
-    const { data, secrets } = prepareRegistration(email, username, password);
+    // Cripto del lado del cliente (async: DH key pair se genera en Web Worker)
+    const { data, secrets } = await prepareRegistration(email, username, password);
 
     // Enviar al servidor (password NUNCA sale en claro)
     const res = await fetch('/api/auth/register', {
@@ -50,8 +51,9 @@ export function useAuth() {
     // Auto-login después de registro
     const loginResult = await loginFn(email, password);
 
-    // Guardar claves en memoria
-    setKeys(secrets.dhKeyPair.privateKey, secrets.passwordDerivedKey);
+    // Guardar claves en memoria (storageKey se calcula en loginFn)
+    const storageKey = pbkdf2(loginResult.id, 'storage-salt', 1000, 32);
+    setKeys(secrets.dhKeyPair.privateKey, secrets.passwordDerivedKey, storageKey);
 
     return loginResult;
   }, [setKeys]);
@@ -84,7 +86,10 @@ export function useAuth() {
 
     const { token: newToken, user: newUser } = await loginRes.json();
     setAuth(newUser, newToken);
-    setKeys(new Uint8Array(0), passwordDerivedKey); // DH key se cargará de BD
+
+    // Calcular storageKey una sola vez y cachear en Zustand
+    const storageKey = pbkdf2(newUser.id, 'storage-salt', 1000, 32);
+    setKeys(new Uint8Array(0), passwordDerivedKey, storageKey); // DH key se cargará de BD
 
     return newUser;
   }, [setAuth, setKeys]);

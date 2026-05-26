@@ -148,7 +148,9 @@ describe('Archivado es personal: el estado de A no afecta la vista de B', () => 
     setupQueue([
       // Q1: participante de B — su fila no cambió
       { data: [{ conversation_id: CONV_ID, encrypted_shared_key: 'ek', shared_key_iv: 'iv', shared_key_mac: 'mac', is_archived: false, archived_at: null, muted_until: null }] },
-      // Q2: otros participantes
+      // Q2a: metadatos de la conversación
+      { data: [{ id: CONV_ID, is_group: false, name: null }] },
+      // Q2b: otros participantes
       { data: [{ conversation_id: CONV_ID, user_id: USER_A }] },
       // Q3: datos del otro usuario
       { data: [{ id: USER_A, username: 'usera' }] },
@@ -176,6 +178,7 @@ describe('Archivado es personal: el estado de A no afecta la vista de B', () => 
   test('User A archiva → aparece en su lista archivada', async () => {
     setupQueue([
       { data: [{ conversation_id: CONV_ID, encrypted_shared_key: 'ek', shared_key_iv: 'iv', shared_key_mac: 'mac', is_archived: true, archived_at: new Date().toISOString(), muted_until: null }] },
+      { data: [{ id: CONV_ID, is_group: false, name: null }] },
       { data: [{ conversation_id: CONV_ID, user_id: USER_B }] },
       { data: [{ id: USER_B, username: 'userb' }] },
       { data: [] },
@@ -205,6 +208,7 @@ describe('Silenciado es personal: el muted_until de A no afecta la respuesta de 
     // User B consulta su lista → su fila tiene muted_until=null (la suya propia)
     setupQueue([
       { data: [{ conversation_id: CONV_ID, encrypted_shared_key: 'ek', shared_key_iv: 'iv', shared_key_mac: 'mac', is_archived: false, archived_at: null, muted_until: null }] },
+      { data: [{ id: CONV_ID, is_group: false, name: null }] },
       { data: [{ conversation_id: CONV_ID, user_id: USER_A }] },
       { data: [{ id: USER_A, username: 'usera' }] },
       { data: [] },

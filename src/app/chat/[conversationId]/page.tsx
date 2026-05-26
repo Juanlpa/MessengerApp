@@ -73,7 +73,9 @@ interface Message {
 export default function ConversationPage() {
   const params = useParams();
   const conversationId = params.conversationId as string;
-  const { user, token } = useAuthStore();
+  const user = useAuthStore(s => s.user);
+  const token = useAuthStore(s => s.token);
+  const cachedStorageKey = useAuthStore(s => s.storageKey);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
@@ -303,26 +305,26 @@ export default function ConversationPage() {
     if (!token || !user) return;
     setLoading(true);
     try {
-      const convRes = await fetch(`/api/conversations?t=${Date.now()}`, {
+      // Usar endpoint individual en vez de descargar la lista completa
+      const convRes = await fetch(`/api/conversations/${conversationId}?t=${Date.now()}`, {
         cache: 'no-store',
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!convRes.ok) throw new Error('Failed to load conversations');
+      if (!convRes.ok) throw new Error('Failed to load conversation');
       const convData = await convRes.json();
-      const conv = convData.conversations.find((c: { id: string }) => c.id === conversationId);
+      const conv = convData.conversation;
       if (!conv) throw new Error('Conversation not found');
 
       setIsGroup(conv.isGroup || false);
       setGroupName(conv.groupName || '');
-      setOtherUsername(conv.otherUser.username);
-      setOtherUserId(conv.otherUser.id);
+      setOtherUsername(conv.otherUser?.username || '');
+      setOtherUserId(conv.otherUser?.id || '');
 
-      // Descifrar shared key
+      // Descifrar shared key (storageKey ya está cacheado en Zustand)
       const { decryptSharedKeyFromStorage } = await import('@/lib/crypto/key-exchange');
-      const { pbkdf2 } = await import('@/lib/crypto/pbkdf2');
 
-      const storageKey = pbkdf2(user.id, 'storage-salt', 1000, 32);
-      const decryptedSharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKey);
+      if (!cachedStorageKey) throw new Error('storageKey not available');
+      const decryptedSharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, cachedStorageKey);
       setSharedKey(decryptedSharedKey);
 
       // Cargar mensajes iniciales
@@ -689,7 +691,7 @@ export default function ConversationPage() {
         messageText={forwardingMessage?.text || ''}
         currentConversationId={conversationId}
         token={token || ''}
-        userId={user?.id || ''}
+        storageKey={cachedStorageKey}
         onClose={() => setForwardingMessage(null)}
         onForwarded={(targetUsername) => {
           setForwardToast(`Mensaje reenviado a ${targetUsername}`);

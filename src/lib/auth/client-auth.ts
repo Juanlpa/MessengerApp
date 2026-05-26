@@ -7,7 +7,6 @@
 
 import { pbkdf2 } from '../crypto/pbkdf2';
 import { sha256 } from '../crypto/sha256';
-import { generateDHKeyPair } from '../crypto/dh';
 import { toHex, randomBytes } from '../crypto/utils';
 import type { DHKeyPair } from '../crypto/dh';
 
@@ -30,14 +29,14 @@ export interface RegistrationSecrets {
  * Prepara los datos de registro del lado del cliente.
  * 1. Genera salt aleatorio
  * 2. Deriva hash con PBKDF2
- * 3. Genera par de claves DH
+ * 3. Genera par de claves DH (en Web Worker para no bloquear main thread)
  * 4. Retorna datos para enviar al servidor + secretos para guardar en memoria
  */
-export function prepareRegistration(
+export async function prepareRegistration(
   email: string,
   username: string,
   password: string
-): { data: RegistrationData; secrets: RegistrationSecrets } {
+): Promise<{ data: RegistrationData; secrets: RegistrationSecrets }> {
   // 1. Generar salt aleatorio (16 bytes = 128 bits)
   const salt = randomBytes(16);
   const saltHex = toHex(salt);
@@ -49,8 +48,15 @@ export function prepareRegistration(
   // (no enviamos el derived key directamente, enviamos su hash)
   const passwordHash = sha256(passwordDerivedKey);
 
-  // 4. Generar par de claves DH
-  const dhKeyPair = generateDHKeyPair();
+  // 4. Generar par de claves DH en Web Worker (non-blocking)
+  let dhKeyPair: DHKeyPair;
+  if (typeof window !== 'undefined') {
+    const { generateDHKeyPairAsync } = await import('@/workers/dh-worker-client');
+    dhKeyPair = await generateDHKeyPairAsync();
+  } else {
+    const { generateDHKeyPair } = await import('../crypto/dh');
+    dhKeyPair = generateDHKeyPair();
+  }
 
   return {
     data: {

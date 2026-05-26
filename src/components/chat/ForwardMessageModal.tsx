@@ -14,7 +14,7 @@ interface ForwardMessageModalProps {
   messageText: string;
   currentConversationId: string;
   token: string;
-  userId: string;
+  storageKey: Uint8Array | null;
   onClose: () => void;
   onForwarded: (targetUsername: string) => void;
 }
@@ -29,7 +29,7 @@ export function ForwardMessageModal({
   messageText,
   currentConversationId,
   token,
-  userId,
+  storageKey,
   onClose,
   onForwarded,
 }: ForwardMessageModalProps) {
@@ -62,11 +62,10 @@ export function ForwardMessageModal({
     setSendingTo(conv.id);
     try {
       const { decryptSharedKeyFromStorage } = await import('@/lib/crypto/key-exchange');
-      const { pbkdf2 } = await import('@/lib/crypto/pbkdf2');
       const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
 
-      // Descifrar la shared key de la conversación destino con la clave de storage del usuario
-      const storageKey = pbkdf2(userId, 'storage-salt', 1000, 32);
+      // Usar storageKey cacheado del store (via prop)
+      if (!storageKey) throw new Error('storageKey not available');
       const sharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKey);
 
       // Re-cifrar el texto con la key de la conversación destino
