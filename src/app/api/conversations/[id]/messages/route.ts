@@ -1,6 +1,6 @@
 /**
- * GET /api/conversations/[id]/messages — Lista mensajes de una conversación
- * POST /api/conversations/[id]/messages — Enviar mensaje cifrado
+ * GET /api/conversations/[id]/messages — Lista mensajes de una conversación con cursor y adjuntos
+ * POST /api/conversations/[id]/messages — Enviar mensaje cifrado con referencias opcionales
  * 
  * El servidor aplica Capa 2 (at-rest) al guardar y la quita al retornar.
  */
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
   // Traer mensajes desde el cursor hacia atrás (orden DESC para cursor eficiente)
   let query = supabase
     .from('messages')
-    .select('id, sender_id, server_ciphertext, server_iv, server_mac_tag, ciphertext, iv, mac_tag, created_at, reply_to_id, edited_at, is_deleted')
+    .select('id, sender_id, server_ciphertext, server_iv, server_mac_tag, ciphertext, iv, mac_tag, created_at, reply_to_id, edited_at, is_deleted, message_type, attachment_id, attachment:attachments!attachment_id(id, original_filename, mime_type, size_bytes, attachment_type, duration_ms, waveform_data)')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
     .limit(limit + 1); // uno extra para detectar si hay más
@@ -57,6 +57,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
   const hasMore = (rawMessages || []).length > limit;
   const messages = hasMore ? (rawMessages || []).slice(0, limit) : (rawMessages || []);
+  
   // Volver a orden cronológico ascendente para el cliente
   messages.reverse();
 
@@ -73,6 +74,8 @@ export async function GET(request: NextRequest, context: RouteContext) {
         isDeleted: true,
         replyToId: msg.reply_to_id ?? null,
         editedAt: msg.edited_at ?? null,
+        messageType: msg.message_type || 'text',
+        attachment: null,
       };
     }
     try {
@@ -81,6 +84,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
         masterKey
       );
       const e2eData = JSON.parse(e2eCiphertext);
+      const att = msg.attachment as any;
       return {
         id: msg.id,
         senderId: msg.sender_id,
@@ -93,6 +97,16 @@ export async function GET(request: NextRequest, context: RouteContext) {
         isDeleted: false,
         replyToId: msg.reply_to_id ?? null,
         editedAt: msg.edited_at ?? null,
+        messageType: msg.message_type || 'text',
+        attachment: att ? {
+          id: att.id,
+          filename: att.original_filename,
+          mimeType: att.mime_type,
+          sizeBytes: att.size_bytes,
+          attachmentType: att.attachment_type,
+          durationMs: att.duration_ms ?? null,
+          waveformData: att.waveform_data ? JSON.parse(att.waveform_data) : [],
+        } : null,
       };
     } catch (err) {
       console.error('Failed to decrypt at-rest layer for message:', msg.id, err);
@@ -104,6 +118,8 @@ export async function GET(request: NextRequest, context: RouteContext) {
         isDeleted: false,
         replyToId: msg.reply_to_id ?? null,
         editedAt: msg.edited_at ?? null,
+        messageType: msg.message_type || 'text',
+        attachment: null,
         error: 'Decryption failed',
       };
     }
@@ -133,7 +149,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   try {
     const body = await request.json();
-    const { e2eEncrypted, replyToId } = body;
+    const { e2eEncrypted, replyToId, messageType, attachmentId } = body;
 
     if (!e2eEncrypted || !e2eEncrypted.ciphertext || !e2eEncrypted.iv || !e2eEncrypted.mac) {
       return NextResponse.json({ error: 'Missing E2E encrypted data' }, { status: 400 });
@@ -170,6 +186,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
         server_iv: serverEncrypted.iv,
         server_mac_tag: serverEncrypted.mac,
         reply_to_id: replyToId ?? null,
+        message_type: messageType || 'text',
+        attachment_id: attachmentId || null,
       })
       .select('id, created_at')
       .single();
@@ -179,9 +197,55 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: 'Failed to send message' }, { status: 500 });
     }
 
+    // Fire-and-forget push notifications to other participants
+    triggerPushForOtherParticipants(supabase, conversationId, user.sub, request).catch(() => {});
+
     return NextResponse.json({ message }, { status: 201 });
   } catch (err) {
     console.error('Send message error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
+}
+
+async function triggerPushForOtherParticipants(
+  supabase: ReturnType<typeof import('@/lib/supabase/admin').getSupabaseAdmin>,
+  conversationId: string,
+  senderId: string,
+  request: NextRequest
+) {
+  const { data: others } = await supabase
+    .from('conversation_participants')
+    .select('user_id')
+    .eq('conversation_id', conversationId)
+    .neq('user_id', senderId);
+
+  if (!others || others.length === 0) return;
+
+  const { data: senderData } = await supabase
+    .from('users')
+    .select('username')
+    .eq('id', senderId)
+    .single();
+
+  const senderName = senderData?.username || 'Alguien';
+  const baseUrl = request.nextUrl.origin;
+
+  await Promise.allSettled(
+    others.map((p: { user_id: string }) =>
+      fetch(`${baseUrl}/api/notifications/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: request.headers.get('Authorization') || '',
+        },
+        body: JSON.stringify({
+          userId: p.user_id,
+          title: senderName,
+          body: 'Nuevo mensaje',
+          conversationId,
+          type: 'message',
+        }),
+      })
+    )
+  );
 }

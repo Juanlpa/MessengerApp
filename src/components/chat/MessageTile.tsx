@@ -4,6 +4,8 @@ import { memo } from 'react';
 import { MessageStatus } from '@/components/chat/MessageStatus';
 import { MessageReactions } from '@/components/chat/MessageReactions';
 import { QuotedMessage } from '@/components/chat/QuotedMessage';
+import { AttachmentPreview } from '@/components/chat/AttachmentPreview';
+import { VoicePlayer } from '@/components/chat/VoicePlayer';
 
 export interface MessageData {
   id: string;
@@ -17,6 +19,16 @@ export interface MessageData {
   replyToId?: string | null;
   editedAt?: string | null;
   reactions?: { emoji: string; userIds: string[] }[];
+  messageType?: 'text' | 'voice' | 'image' | 'file';
+  attachment?: {
+    id: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    attachmentType: 'image' | 'voice' | 'file';
+    durationMs?: number | null;
+    waveformData?: number[];
+  } | null;
 }
 
 interface MessageTileProps {
@@ -36,6 +48,11 @@ interface MessageTileProps {
   onSetEditText: (text: string) => void;
   onCancelEdit: () => void;
   onDeleteMessage: (messageId: string) => void;
+  // Attachment callbacks (develop)
+  onViewImage: (id: string) => void;
+  onLoadThumbnail: (id: string) => Promise<{ blobUrl: string } | null>;
+  onDownload: (id: string) => Promise<void>;
+  onLoadAudio: (id: string) => Promise<{ blobUrl: string } | null>;
 }
 
 function MessageTileInner({
@@ -55,7 +72,14 @@ function MessageTileInner({
   onSetEditText,
   onCancelEdit,
   onDeleteMessage,
+  // Attachment callbacks
+  onViewImage,
+  onLoadThumbnail,
+  onDownload,
+  onLoadAudio,
 }: MessageTileProps) {
+  const hasAttachment = msg.attachment && msg.messageType !== 'text';
+
   return (
     <div
       className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} ${isLastInGroup ? 'mb-3' : 'mb-0.5'} group`}
@@ -149,17 +173,49 @@ function MessageTileInner({
           </div>
         ) : (
           <div
-            className={`px-4 py-2 ${
+            className={`${
               msg.isDeleted
-                ? 'bg-transparent border border-[#e4e6eb] text-[#65676b] italic rounded-[20px]'
-                : isMe
+                ? 'px-4 py-2 bg-transparent border border-[#e4e6eb] text-[#65676b] italic rounded-[20px]'
+                : hasAttachment
+                  ? 'px-1.5 py-1.5'
+                  : 'px-4 py-2'
+            } ${
+              !msg.isDeleted && !hasAttachment
+                ? isMe
                   ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
                   : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
+                : ''
+            } ${
+              hasAttachment
+                ? isMe
+                  ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
+                  : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
+                : ''
             }`}
             style={{ wordBreak: 'break-word' }}
           >
             {msg.isDeleted ? (
               <p className="text-[14px]">Mensaje eliminado</p>
+            ) : hasAttachment && msg.attachment && msg.attachment.attachmentType !== 'voice' ? (
+              <AttachmentPreview
+                attachmentId={msg.attachment.id}
+                filename={msg.attachment.filename}
+                mimeType={msg.attachment.mimeType}
+                sizeBytes={msg.attachment.sizeBytes}
+                attachmentType={msg.attachment.attachmentType}
+                isOwnMessage={isMe}
+                onDownload={onDownload}
+                onViewImage={onViewImage}
+                onLoadThumbnail={onLoadThumbnail}
+              />
+            ) : hasAttachment && msg.attachment && msg.attachment.attachmentType === 'voice' ? (
+              <VoicePlayer
+                attachmentId={msg.attachment.id}
+                durationMs={msg.attachment.durationMs ?? 0}
+                waveformData={msg.attachment.waveformData ?? []}
+                isOwnMessage={isMe}
+                onLoadAudio={onLoadAudio}
+              />
             ) : (
               <>
                 <p className="text-[15px] leading-tight">{msg.text || '[Mensaje cifrado]'}</p>
@@ -206,6 +262,9 @@ function areEqual(prev: MessageTileProps, next: MessageTileProps): boolean {
     prev.msg.status === next.msg.status &&
     prev.msg.isDeleted === next.msg.isDeleted &&
     prev.msg.editedAt === next.msg.editedAt &&
+    prev.msg.messageType === next.msg.messageType &&
+    prev.msg.attachment?.id === next.msg.attachment?.id &&
+    prev.msg.attachment?.durationMs === next.msg.attachment?.durationMs &&
     prev.msg.reactions?.length === next.msg.reactions?.length &&
     JSON.stringify(prev.msg.reactions) === JSON.stringify(next.msg.reactions) &&
     prev.isLastInGroup === next.isLastInGroup &&

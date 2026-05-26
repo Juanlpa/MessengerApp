@@ -5,15 +5,9 @@ import dynamic from 'next/dynamic';
 import { useParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import Link from 'next/link';
-import { Video, Search, X } from 'lucide-react';
+import { Video, Phone, Users, Search, X } from 'lucide-react';
 import { useWebRTC } from '@/hooks/useWebRTC';
-import { useRealtimeMessages, useMarkAsRead } from '@/hooks/useRealtimeMessages';
-
-// Lazy: modales pesados fuera del bundle inicial
-const CallModal = dynamic(
-  () => import('@/components/chat/CallModal').then(m => ({ default: m.CallModal })),
-  { ssr: false }
-);
+import { useRealtimeMessages, useMarkAsRead, type BroadcastPayload } from '@/hooks/useRealtimeMessages';
 import { useTypingIndicator } from '@/hooks/useTypingIndicator';
 import { usePresence } from '@/hooks/usePresence';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
@@ -21,6 +15,34 @@ import { OnlineIndicator } from '@/components/chat/OnlineIndicator';
 import { ReplyPreview } from '@/components/chat/ReplyPreview';
 import { ForwardMessageModal } from '@/components/chat/ForwardMessageModal';
 import { MessageTile } from '@/components/chat/MessageTile';
+
+// Hooks de llamadas y adjuntos (develop)
+import { useAttachments } from '@/hooks/useAttachments';
+import { useGroupCall } from '@/hooks/useGroupCall';
+import { useVideoFilter } from '@/hooks/useVideoFilter';
+
+// Componentes de adjuntos y voz (develop)
+import { AttachmentButton } from '@/components/chat/AttachmentButton';
+import { VoiceRecordButton } from '@/components/chat/VoiceRecordButton';
+import { ImageViewer } from '@/components/chat/ImageViewer';
+
+// Lazy: modales pesados fuera del bundle inicial
+const CallModal = dynamic(
+  () => import('@/components/chat/CallModal').then(m => ({ default: m.CallModal })),
+  { ssr: false }
+);
+
+// VideoFilterPanel para llamadas con efectos
+const VideoFilterPanel = dynamic(
+  () => import('@/components/calls/VideoFilterPanel').then(m => ({ default: m.VideoFilterPanel })),
+  { ssr: false }
+);
+
+// GroupCallModal para videollamadas grupales
+const GroupCallModal = dynamic(
+  () => import('@/components/calls/GroupCallModal').then(m => ({ default: m.GroupCallModal })),
+  { ssr: false }
+);
 
 const MESSAGES_PER_PAGE = 30;
 
@@ -36,6 +58,16 @@ interface Message {
   replyToId?: string | null;
   editedAt?: string | null;
   reactions?: { emoji: string; userIds: string[] }[];
+  messageType?: 'text' | 'voice' | 'image' | 'file';
+  attachment?: {
+    id: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    attachmentType: 'image' | 'voice' | 'file';
+    durationMs?: number | null;
+    waveformData?: number[];
+  } | null;
 }
 
 export default function ConversationPage() {
@@ -47,29 +79,69 @@ export default function ConversationPage() {
   const [sending, setSending] = useState(false);
   const [otherUsername, setOtherUsername] = useState('');
   const [otherUserId, setOtherUserId] = useState('');
+  const [isGroup, setIsGroup] = useState(false);
+  const [groupName, setGroupName] = useState('');
   const [sharedKey, setSharedKey] = useState<Uint8Array | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
   // Scroll infinito
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+
   // Búsqueda
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
   // Responder mensaje
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+
   // Editar mensaje
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+
   // Reenviar mensaje
   const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
   const [forwardToast, setForwardToast] = useState<string | null>(null);
 
+  // Image Viewer
+  const [viewerState, setViewerState] = useState<{
+    images: Array<{ id: string; filename: string }>;
+    index: number;
+  } | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const prevScrollHeightRef = useRef<number>(0);
+  const isInitialLoad = useRef(true);
 
-  // WebRTC para llamadas
+  // Ref estable para broadcastMessage (desacoplamiento de realtime)
+  const broadcastMessageRef = useRef<((payload: BroadcastPayload) => void)>(() => {});
+
+  // Filtros de video
+  const {
+    activeFilter,
+    activeBackground,
+    setFilter,
+    setBackground,
+    processStream,
+    stopPipeline,
+  } = useVideoFilter();
+
+  // Llamadas grupales
+  const {
+    callState: groupCallState,
+    participants: groupParticipants,
+    localVideoRef: groupLocalVideoRef,
+    isAudioMuted: groupAudioMuted,
+    isVideoMuted: groupVideoMuted,
+    joinCall: joinGroupCall,
+    leaveCall: leaveGroupCall,
+    toggleAudio: toggleGroupAudio,
+    toggleVideo: toggleGroupVideo,
+  } = useGroupCall(conversationId, user?.id || '', user?.username || '', sharedKey, processStream);
+
+  // WebRTC para llamadas 1-a-1
   const {
     callState,
     localVideoRef,
@@ -78,11 +150,24 @@ export default function ConversationPage() {
     acceptCall,
     rejectCall,
     endCall,
+    inviteToCall,
     toggleAudio,
     toggleVideo,
     isAudioMuted,
     isVideoMuted,
-  } = useWebRTC(conversationId, user?.id || '');
+    isAudioOnly,
+    isE2EMedia,
+  } = useWebRTC(
+    conversationId,
+    user?.id || '',
+    otherUserId || undefined,
+    user?.username || undefined,
+    token || undefined,
+    sharedKey,
+    !isGroup,
+    joinGroupCall,
+    processStream
+  );
 
   // Presencia online/offline
   const { isUserOnline } = usePresence(user?.id || '', user?.username || '');
@@ -94,6 +179,48 @@ export default function ConversationPage() {
     user?.username || ''
   );
 
+  // Hook de adjuntos
+  const {
+    uploadAttachment,
+    downloadAttachment,
+    triggerDownload,
+    uploadProgress,
+    error: attachError,
+    clearError: clearAttachError,
+  } = useAttachments(conversationId, token || '', sharedKey);
+
+  // Limpiar filtros de video al colgar
+  useEffect(() => {
+    if (callState === 'idle' && groupCallState === 'idle') {
+      stopPipeline();
+    }
+  }, [callState, groupCallState, stopPipeline]);
+
+  // Invitar a tercer participante (convierte 1-a-1 en grupal)
+  const handleAddParticipant = useCallback(async (contactId: string, contactName: string) => {
+    await inviteToCall(contactId, contactName);
+    await joinGroupCall();
+  }, [inviteToCall, joinGroupCall]);
+
+  // Handlers para visor de imágenes y adjuntos
+  const handleViewImage = useCallback((id: string) => {
+    const list = messages
+      .filter(m => m.attachment?.attachmentType === 'image')
+      .map(m => ({ id: m.attachment!.id, filename: m.attachment!.filename }));
+    const idx = list.findIndex(img => img.id === id);
+    if (idx >= 0) {
+      setViewerState({ images: list, index: idx });
+    }
+  }, [messages]);
+
+  const handleLoadThumbnail = useCallback(async (id: string) => {
+    return downloadAttachment(id, true);
+  }, [downloadAttachment]);
+
+  const handleLoadAudio = useCallback(async (id: string) => {
+    return downloadAttachment(id, false);
+  }, [downloadAttachment]);
+
   // Handler para nuevos mensajes via Realtime
   const handleNewMessage = useCallback((msg: {
     id: string;
@@ -101,11 +228,21 @@ export default function ConversationPage() {
     text: string;
     e2e: { ciphertext: string; iv: string; mac: string } | null;
     createdAt: string;
+    replyToId?: string | null;
+    messageType?: string;
+    attachment?: {
+      id: string;
+      filename: string;
+      mimeType: string;
+      sizeBytes: number;
+      attachmentType: 'image' | 'voice' | 'file';
+      durationMs?: number | null;
+      waveformData?: number[];
+    } | null;
   }) => {
     setMessages(prev => {
-      // Evitar duplicados
       if (prev.some(m => m.id === msg.id)) return prev;
-      return [...prev, { ...msg, status: 'delivered' as const }];
+      return [...prev, { ...msg, isDeleted: false, status: 'delivered' as const }];
     });
   }, []);
 
@@ -144,8 +281,8 @@ export default function ConversationPage() {
     }
   }, [token]);
 
-  // Suscripción Realtime
-  useRealtimeMessages({
+  // Suscripción Realtime consolidada
+  const { broadcastMessage } = useRealtimeMessages({
     conversationId,
     userId: user?.id || '',
     token: token || '',
@@ -155,6 +292,11 @@ export default function ConversationPage() {
     onMessageUpdated: handleMessageUpdated,
     onReactionsUpdated: handleReactionsUpdated,
   });
+
+  // Mantener broadcastMessageRef al día
+  useEffect(() => {
+    broadcastMessageRef.current = broadcastMessage;
+  }, [broadcastMessage]);
 
   // Marcar mensajes como leídos cuando la conversación está abierta
   const otherMessageIds = messages
@@ -176,6 +318,8 @@ export default function ConversationPage() {
       const conv = convData.conversations.find((c: { id: string }) => c.id === conversationId);
       if (!conv) throw new Error('Conversation not found');
 
+      setIsGroup(conv.isGroup || false);
+      setGroupName(conv.groupName || '');
       setOtherUsername(conv.otherUser.username);
       setOtherUserId(conv.otherUser.id);
 
@@ -232,7 +376,6 @@ export default function ConversationPage() {
     setHasMore(data.hasMore ?? false);
 
     if (cursor) {
-      // Preservar posición de scroll al hacer prepend
       const container = scrollContainerRef.current;
       if (container) prevScrollHeightRef.current = container.scrollHeight;
       setMessages(prev => [...decrypted, ...prev]);
@@ -246,7 +389,6 @@ export default function ConversationPage() {
   }, [initConversation]);
 
   // Scroll al fondo solo en la carga inicial
-  const isInitialLoad = useRef(true);
   useEffect(() => {
     if (isInitialLoad.current && messages.length > 0) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
@@ -273,7 +415,7 @@ export default function ConversationPage() {
     prevLengthRef.current = messages.length;
   }, [messages, user?.id]);
 
-  // Scroll infinito: detectar cuando el usuario sube hasta arriba
+  // Scroll infinito
   const handleScroll = useCallback(async () => {
     const container = scrollContainerRef.current;
     if (!container || !hasMore || loadingMore) return;
@@ -286,13 +428,14 @@ export default function ConversationPage() {
     }
   }, [hasMore, loadingMore, messages, loadMessages]);
 
-  // Búsqueda local sobre mensajes ya descifrados
+  // Búsqueda local
   const filteredMessages = useMemo(() => {
     if (!searchQuery.trim()) return messages;
     const q = searchQuery.toLowerCase();
     return messages.filter(m => m.text?.toLowerCase().includes(q));
   }, [messages, searchQuery]);
 
+  // Enviar mensaje de texto
   const sendMessage = async () => {
     if (!newMessage.trim() || !token || !sharedKey || sending) return;
     setSending(true);
@@ -310,6 +453,7 @@ export default function ConversationPage() {
         createdAt: new Date().toISOString(),
         status: 'sent',
         replyToId: replyTo?.id ?? null,
+        messageType: 'text',
       };
       setMessages(prev => [...prev, optimisticMsg]);
       setNewMessage('');
@@ -327,6 +471,15 @@ export default function ConversationPage() {
         setMessages(prev =>
           prev.map(m => m.id === optimisticId ? { ...m, id: data.message.id, status: 'sent' as const } : m)
         );
+
+        // Transmitir vía Broadcast Realtime
+        broadcastMessageRef.current({
+          id: data.message.id,
+          senderId: user?.id || '',
+          e2e: e2eEncrypted,
+          createdAt: data.message.created_at ?? new Date().toISOString(),
+          messageType: 'text',
+        });
       } else {
         setMessages(prev =>
           prev.map(m => m.id === optimisticId ? { ...m, text: `${m.text} (Error al enviar)`, error: 'send_failed' } : m)
@@ -339,10 +492,71 @@ export default function ConversationPage() {
     }
   };
 
+  // Adjuntar archivo (desencadena subida y envío)
+  const handleFileSelected = useCallback(async (file: File) => {
+    if (!token || !sharedKey) return null;
+
+    const result = await uploadAttachment(file);
+    if (!result) return null;
+
+    const type = file.type.startsWith('image/') ? 'image' : 'file';
+    const content = `[${type}:${result.attachmentId}] ${file.name}`;
+    
+    try {
+      const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
+      const e2eEncrypted = encryptMessageE2E(content, sharedKey);
+
+      const optimisticId = `optimistic-${Date.now()}`;
+      setMessages(prev => [...prev, {
+        id: optimisticId,
+        senderId: user?.id || '',
+        text: file.name,
+        createdAt: new Date().toISOString(),
+        status: 'sent' as const,
+        messageType: type,
+        attachment: {
+          id: result.attachmentId,
+          filename: file.name,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          attachmentType: type,
+        },
+      }]);
+
+      const res = await fetch(`/api/conversations/${conversationId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ e2eEncrypted, messageType: type, attachmentId: result.attachmentId }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: data.message.id } : m));
+
+        // Transmitir vía Broadcast
+        broadcastMessageRef.current({
+          id: data.message.id,
+          senderId: user?.id || '',
+          e2e: e2eEncrypted,
+          createdAt: data.message.created_at ?? new Date().toISOString(),
+          messageType: type,
+          attachment: {
+            id: result.attachmentId,
+            filename: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+            attachmentType: type,
+          },
+        });
+      }
+    } catch (err) {
+      console.error('File send error:', err);
+    }
+  }, [conversationId, token, sharedKey, uploadAttachment, user]);
+
   // ── Reacciones ──────────────────────────────────────────────────────────────
   const toggleReaction = useCallback(async (messageId: string, emoji: string) => {
     if (!token || !user) return;
-    // Optimistic update
     setMessages(prev => prev.map(m => {
       if (m.id !== messageId) return m;
       const reactions = m.reactions ? [...m.reactions] : [];
@@ -377,7 +591,6 @@ export default function ConversationPage() {
     const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
     const e2eEncrypted = encryptMessageE2E(editText.trim(), sharedKey);
 
-    // Optimistic
     setMessages(prev => prev.map(m =>
       m.id === editingId ? { ...m, text: editText.trim(), editedAt: new Date().toISOString() } : m
     ));
@@ -394,7 +607,6 @@ export default function ConversationPage() {
   // ── Eliminar mensaje ────────────────────────────────────────────────────────
   const deleteMessage = useCallback(async (messageId: string) => {
     if (!token) return;
-    // Optimistic
     setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, text: undefined } : m));
     await fetch(`/api/messages/${messageId}`, {
       method: 'DELETE',
@@ -434,6 +646,7 @@ export default function ConversationPage() {
 
   return (
     <>
+      {/* Modales de llamada */}
       <CallModal
         callState={callState}
         otherUsername={otherUsername}
@@ -447,6 +660,28 @@ export default function ConversationPage() {
         isAudioMuted={isAudioMuted}
         isVideoMuted={isVideoMuted}
       />
+
+      <GroupCallModal
+        isOpen={groupCallState !== 'idle'}
+        callState={groupCallState}
+        participants={groupParticipants}
+        localVideoRef={groupLocalVideoRef}
+        isAudioMuted={groupAudioMuted}
+        isVideoMuted={groupVideoMuted}
+        onLeave={leaveGroupCall}
+        onToggleAudio={toggleGroupAudio}
+        onToggleVideo={toggleGroupVideo}
+      />
+
+      {/* Panel de filtros de video si hay llamada activa */}
+      {(callState === 'active' || groupCallState === 'active') && (
+        <VideoFilterPanel
+          activeFilter={activeFilter}
+          activeBackground={activeBackground}
+          onSelectFilter={setFilter}
+          onSelectBackground={setBackground}
+        />
+      )}
 
       {/* Modal de reenviar mensaje */}
       <ForwardMessageModal
@@ -488,14 +723,16 @@ export default function ConversationPage() {
         <div className="px-4 py-3 bg-white border-b border-[#e4e6eb] flex items-center gap-3">
           <div className="relative">
             <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white font-medium flex-shrink-0">
-              {otherUsername[0]?.toUpperCase() || '?'}
+              {isGroup ? (groupName[0]?.toUpperCase() || 'G') : (otherUsername[0]?.toUpperCase() || '?')}
             </div>
-            <OnlineIndicator isOnline={isUserOnline(otherUserId)} size="sm" />
+            {!isGroup && <OnlineIndicator isOnline={isUserOnline(otherUserId)} size="sm" />}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[#050505] font-semibold text-[15px] truncate">{otherUsername}</p>
+            <p className="text-[#050505] font-semibold text-[15px] truncate">{isGroup ? groupName : otherUsername}</p>
             <div className="flex items-center gap-1 text-[13px] truncate">
-              {isUserOnline(otherUserId) ? (
+              {isGroup ? (
+                <span className="text-[#65676b]">{groupParticipants.length} miembros</span>
+              ) : isUserOnline(otherUserId) ? (
                 <span className="text-[#31A24C]">En línea</span>
               ) : (
                 <span className="text-[#65676b]">Desconectado</span>
@@ -508,13 +745,26 @@ export default function ConversationPage() {
               <span className="text-[#65676b]">E2E</span>
             </div>
           </div>
-          <button
-            onClick={initiateCall}
-            className="p-2 rounded-full hover:bg-[#f0f2f5] text-[#0084ff] transition-colors"
-            title="Iniciar videollamada cifrada"
-          >
-            <Video className="w-6 h-6" fill="currentColor" />
-          </button>
+          {!isGroup && (
+            <button
+              onClick={initiateCall}
+              className="p-2 rounded-full hover:bg-[#f0f2f5] text-[#0084ff] transition-colors"
+              title="Iniciar videollamada cifrada"
+            >
+              <Video className="w-6 h-6" fill="currentColor" />
+            </button>
+          )}
+          {isGroup && callState === 'active' && (
+            <button
+              onClick={() => {
+                // Agregar miembro a la llamada
+              }}
+              className="p-2 rounded-full hover:bg-[#f0f2f5] text-[#0084ff] transition-colors"
+              title="Agregar miembro"
+            >
+              <Users className="w-6 h-6" />
+            </button>
+          )}
           {/* Botón búsqueda */}
           <button
             onClick={() => { setSearchOpen(o => !o); setSearchQuery(''); }}
@@ -604,6 +854,11 @@ export default function ConversationPage() {
                 onSetEditText={setEditText}
                 onCancelEdit={() => setEditingId(null)}
                 onDeleteMessage={deleteMessage}
+                // Callbacks para adjuntos (develop)
+                onViewImage={handleViewImage}
+                onLoadThumbnail={handleLoadThumbnail}
+                onDownload={triggerDownload}
+                onLoadAudio={handleLoadAudio}
               />
             );
           })}
@@ -625,6 +880,15 @@ export default function ConversationPage() {
             />
           )}
           <div className="flex items-end gap-2">
+            {/* Attachment Button */}
+            <AttachmentButton
+              onFileSelected={handleFileSelected}
+              uploadProgress={uploadProgress}
+              error={attachError}
+              onClearError={clearAttachError}
+              disabled={!sharedKey}
+            />
+
             <div className="flex-1 bg-[#f0f2f5] rounded-3xl flex items-center pr-2">
               <input
                 type="text"
@@ -659,18 +923,114 @@ export default function ConversationPage() {
                 )}
               </button>
             ) : (
-              <button className="p-2 text-[#0084ff] hover:bg-[#f0f2f5] rounded-full transition-colors flex-shrink-0">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" y1="19" x2="12" y2="23" />
-                  <line x1="8" y1="23" x2="16" y2="23" />
-                </svg>
-              </button>
+              // Voice Record Button
+              <VoiceRecordButton
+                sharedKey={sharedKey}
+                disabled={!sharedKey}
+                onVoiceReady={async (result) => {
+                  if (!token || !sharedKey) return;
+                  
+                  // Crear blob cifrado y subir como attachment de voz
+                  const hexToBytes = (hex: string) => {
+                    const bytes = new Uint8Array(hex.length / 2);
+                    for (let i = 0; i < hex.length; i += 2) bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+                    return bytes;
+                  };
+                  const encBlob = new Blob([hexToBytes(result.encryptedData.ciphertext)], { type: 'application/octet-stream' });
+
+                  const formData = new FormData();
+                  formData.append('encryptedFile', encBlob, 'voice.enc');
+                  formData.append('conversationId', conversationId);
+                  formData.append('iv', result.encryptedData.iv);
+                  formData.append('macTag', result.encryptedData.mac);
+                  formData.append('mimeType', 'audio/webm');
+                  formData.append('originalFilename', `voice_${Date.now()}.webm`);
+                  formData.append('sizeBytes', String(result.sizeBytes));
+                  formData.append('attachmentType', 'voice');
+                  formData.append('durationMs', String(result.durationMs));
+                  formData.append('waveformData', JSON.stringify(result.waveformData));
+
+                  try {
+                    const uploadRes = await fetch('/api/attachments/upload', {
+                      method: 'POST',
+                      headers: { Authorization: `Bearer ${token}` },
+                      body: formData,
+                    });
+                    if (!uploadRes.ok) throw new Error('Voice upload failed');
+                    const uploadData = await uploadRes.json();
+
+                    // Enviar mensaje tipo voice
+                    const content = `[voice:${uploadData.attachmentId}] Mensaje de voz`;
+                    const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
+                    const e2eEncrypted = encryptMessageE2E(content, sharedKey);
+
+                    const optimisticId = `optimistic-voice-${Date.now()}`;
+                    setMessages(prev => [...prev, {
+                      id: optimisticId,
+                      senderId: user?.id || '',
+                      text: 'Mensaje de voz',
+                      createdAt: new Date().toISOString(),
+                      status: 'sent' as const,
+                      messageType: 'voice' as const,
+                      attachment: {
+                        id: uploadData.attachmentId,
+                        filename: 'voice.webm',
+                        mimeType: 'audio/webm',
+                        sizeBytes: result.sizeBytes,
+                        attachmentType: 'voice' as const,
+                        durationMs: result.durationMs,
+                        waveformData: result.waveformData,
+                      },
+                    }]);
+
+                    const msgRes = await fetch(`/api/conversations/${conversationId}/messages`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                      body: JSON.stringify({ e2eEncrypted, messageType: 'voice', attachmentId: uploadData.attachmentId }),
+                    });
+                    if (msgRes.ok) {
+                      const data = await msgRes.json();
+                      setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, id: data.message.id } : m));
+
+                      // Transmitir vía Broadcast
+                      broadcastMessageRef.current({
+                        id: data.message.id,
+                        senderId: user?.id || '',
+                        e2e: e2eEncrypted,
+                        createdAt: data.message.created_at ?? new Date().toISOString(),
+                        messageType: 'voice',
+                        attachment: {
+                          id: uploadData.attachmentId,
+                          filename: 'voice.webm',
+                          mimeType: 'audio/webm',
+                          sizeBytes: result.sizeBytes,
+                          attachmentType: 'voice' as const,
+                          durationMs: result.durationMs,
+                          waveformData: result.waveformData,
+                        },
+                      });
+                    }
+                  } catch (err) {
+                    console.error('Voice send error:', err);
+                  }
+                }}
+              />
             )}
           </div>
         </div>
       </div>
+
+      {/* Visor de imágenes */}
+      {viewerState && (
+        <ImageViewer
+          isOpen={true}
+          images={viewerState.images}
+          initialIndex={viewerState.index}
+          onClose={() => setViewerState(null)}
+          onDownload={triggerDownload}
+          onLoadFullImage={(id) => downloadAttachment(id, false)}
+        />
+      )}
     </>
   );
 }
