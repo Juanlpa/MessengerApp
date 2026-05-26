@@ -34,6 +34,10 @@ export function useVideoFilter() {
     }
     if (hiddenVideoRef.current) {
       hiddenVideoRef.current.pause();
+      const stream = hiddenVideoRef.current.srcObject as MediaStream | null;
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
       hiddenVideoRef.current.srcObject = null;
       hiddenVideoRef.current = null;
     }
