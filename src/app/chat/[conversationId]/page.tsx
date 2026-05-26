@@ -16,6 +16,7 @@ import { OnlineIndicator } from '@/components/chat/OnlineIndicator';
 import { MessageReactions } from '@/components/chat/MessageReactions';
 import { QuotedMessage } from '@/components/chat/QuotedMessage';
 import { ReplyPreview } from '@/components/chat/ReplyPreview';
+import { ForwardMessageModal } from '@/components/chat/ForwardMessageModal';
 
 const MESSAGES_PER_PAGE = 30;
 
@@ -56,6 +57,9 @@ export default function ConversationPage() {
   // Editar mensaje
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  // Reenviar mensaje
+  const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
+  const [forwardToast, setForwardToast] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -440,6 +444,27 @@ export default function ConversationPage() {
         isVideoMuted={isVideoMuted}
       />
 
+      {/* Modal de reenviar mensaje */}
+      <ForwardMessageModal
+        open={forwardingMessage !== null}
+        messageText={forwardingMessage?.text || ''}
+        currentConversationId={conversationId}
+        token={token || ''}
+        userId={user?.id || ''}
+        onClose={() => setForwardingMessage(null)}
+        onForwarded={(targetUsername) => {
+          setForwardToast(`Mensaje reenviado a ${targetUsername}`);
+          setTimeout(() => setForwardToast(null), 3000);
+        }}
+      />
+
+      {/* Toast de confirmación de reenvío */}
+      {forwardToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] bg-[#050505] text-white px-4 py-2 rounded-full text-[14px] shadow-lg">
+          {forwardToast}
+        </div>
+      )}
+
       {/* Sidebar mínima con link de vuelta */}
       <div className="w-[360px] bg-white border-r border-[#e4e6eb] flex flex-col">
         <div className="p-4 pt-5 pb-2">
@@ -583,6 +608,16 @@ export default function ConversationPage() {
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                           <polyline points="9 17 4 12 9 7" /><line x1="20" y1="12" x2="4" y2="12" />
+                        </svg>
+                      </button>
+                      {/* Reenviar */}
+                      <button
+                        onClick={() => setForwardingMessage(msg)}
+                        className="p-1 rounded-full hover:bg-[#e4e6eb] text-[#65676b]"
+                        title="Reenviar"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>
                         </svg>
                       </button>
                       {/* Reaccionar */}
