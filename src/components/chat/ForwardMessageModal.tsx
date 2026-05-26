@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { X, Send, Search } from 'lucide-react';
+import { supabase } from '@/lib/supabase/client';
 
 interface Conversation {
   id: string;
@@ -13,11 +14,20 @@ interface ForwardMessageModalProps {
   open: boolean;
   messageText: string;
   currentConversationId: string;
+  currentUserId: string;
   token: string;
   storageKey: Uint8Array | null;
   onClose: () => void;
   onForwarded: (targetUsername: string) => void;
 }
+
+type ForwardBroadcastPayload = {
+  id: string;
+  senderId: string;
+  e2e: { ciphertext: string; iv: string; mac: string };
+  createdAt: string;
+  messageType: 'text';
+};
 
 /**
  * Modal que permite reenviar un mensaje a otra conversación.
@@ -28,6 +38,7 @@ export function ForwardMessageModal({
   open,
   messageText,
   currentConversationId,
+  currentUserId,
   token,
   storageKey,
   onClose,
@@ -38,23 +49,54 @@ export function ForwardMessageModal({
   const [search, setSearch] = useState('');
   const [sendingTo, setSendingTo] = useState<string | null>(null);
 
+  const broadcastForwardedMessage = async (
+    conversationId: string,
+    payload: ForwardBroadcastPayload
+  ) => {
+    const channel = supabase.channel(`conv:${conversationId}`);
+
+    try {
+      await new Promise<void>((resolve) => {
+        const timeoutId = window.setTimeout(resolve, 1500);
+        channel.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            window.clearTimeout(timeoutId);
+            resolve();
+          }
+        });
+      });
+
+      await channel.send({
+        type: 'broadcast',
+        event: 'new_message',
+        payload,
+      });
+    } finally {
+      supabase.removeChannel(channel);
+    }
+  };
+
   useEffect(() => {
     if (!open || !token) return;
 
-    setLoading(true);
-    fetch(`/api/conversations?t=${Date.now()}`, {
-      cache: 'no-store',
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(r => r.json())
-      .then(data => {
-        const others = (data.conversations || []).filter(
-          (c: Conversation) => c.id !== currentConversationId
-        );
-        setConversations(others);
+    const timeoutId = window.setTimeout(() => {
+      setLoading(true);
+      fetch(`/api/conversations?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { Authorization: `Bearer ${token}` },
       })
-      .catch(err => console.error('Forward modal: failed to load conversations', err))
-      .finally(() => setLoading(false));
+        .then(r => r.json())
+        .then(data => {
+          const others = (data.conversations || []).filter(
+            (c: Conversation) => c.id !== currentConversationId
+          );
+          setConversations(others);
+        })
+        .catch(err => console.error('Forward modal: failed to load conversations', err))
+        .finally(() => setLoading(false));
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [open, token, currentConversationId]);
 
   const handleForward = async (conv: Conversation) => {
@@ -63,10 +105,12 @@ export function ForwardMessageModal({
     try {
       const { decryptSharedKeyFromStorage } = await import('@/lib/crypto/key-exchange');
       const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
+      const { pbkdf2 } = await import('@/lib/crypto/pbkdf2');
 
-      // Usar storageKey cacheado del store (via prop)
-      if (!storageKey) throw new Error('storageKey not available');
-      const sharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKey);
+      // Usar la storageKey cacheada o derivarla si el store aún no terminó de hidratarla.
+      if (!currentUserId) throw new Error('user not available');
+      const keyForStorage = storageKey ?? pbkdf2(currentUserId, 'storage-salt', 1000, 32);
+      const sharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, keyForStorage);
 
       // Re-cifrar el texto con la key de la conversación destino
       const e2eEncrypted = encryptMessageE2E(`[Reenviado] ${messageText}`, sharedKey);
@@ -78,6 +122,14 @@ export function ForwardMessageModal({
       });
 
       if (res.ok) {
+        const data = await res.json();
+        await broadcastForwardedMessage(conv.id, {
+          id: data.message.id,
+          senderId: currentUserId,
+          e2e: e2eEncrypted,
+          createdAt: data.message.created_at ?? new Date().toISOString(),
+          messageType: 'text',
+        });
         onForwarded(conv.otherUser.username);
         onClose();
       } else {

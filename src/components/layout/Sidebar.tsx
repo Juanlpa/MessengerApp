@@ -9,6 +9,10 @@ import { OnlineIndicator } from '@/components/chat/OnlineIndicator';
 import { useConversations, isMuted } from '@/hooks/useConversations';
 import { ConversationActions } from '@/components/chat/ConversationActions';
 import { ArchivedSection } from '@/components/layout/ArchivedSection';
+import { Users, Sun, Moon } from 'lucide-react';
+import { useContacts, usePendingRequests } from '@/hooks/useContacts';
+import { ContactsList } from '@/components/contacts/ContactsList';
+import { useThemeStore } from '@/stores/theme-store';
 
 export function Sidebar() {
   const [showNewChat, setShowNewChat] = useState(false);
@@ -16,6 +20,13 @@ export function Sidebar() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Array<{ id: string; username: string; dh_public_key: string }>>([]);
   const [creating, setCreating] = useState(false);
+  const [showContacts, setShowContacts] = useState(false);
+
+  const theme = useThemeStore(s => s.theme);
+
+  const { contacts } = useContacts();
+  const { requests } = usePendingRequests();
+  const pendingCount = requests.length;
 
   const user = useAuthStore(s => s.user);
   const token = useAuthStore(s => s.token);
@@ -89,15 +100,15 @@ export function Sidebar() {
 
   return (
     <>
-      <div className="w-[360px] bg-white border-r border-[#e4e6eb] flex flex-col flex-shrink-0">
+      <div className="w-[360px] bg-white dark:bg-gray-900 border-r border-[#e4e6eb] dark:border-gray-800 flex flex-col flex-shrink-0">
         {/* Header */}
         <div className="p-4 pt-5 pb-2">
           <div className="flex items-center justify-between mb-4">
-            <h1 className="text-2xl font-bold text-[#050505]">Chats</h1>
+            <h1 className="text-2xl font-bold text-[#050505] dark:text-white">Chats</h1>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowNewChat(true)}
-                className="p-2 rounded-full bg-[#f0f2f5] hover:bg-[#e4e6eb] text-[#050505] transition-colors"
+                className="p-2 rounded-full bg-[#f0f2f5] dark:bg-gray-800 hover:bg-[#e4e6eb] dark:hover:bg-gray-700 text-[#050505] dark:text-white transition-colors"
                 title="Nuevo chat"
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -105,11 +116,37 @@ export function Sidebar() {
                 </svg>
               </button>
               <button
+                onClick={() => setShowContacts(true)}
+                className="p-2 rounded-full bg-[#f0f2f5] dark:bg-gray-800 hover:bg-[#e4e6eb] dark:hover:bg-gray-700 text-[#050505] dark:text-white transition-colors relative"
+                title="Contactos"
+              >
+                <Users size={18} />
+                {pendingCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                    {pendingCount > 9 ? '9+' : pendingCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => useThemeStore.getState().toggleTheme()}
+                className="p-2 rounded-full bg-[#f0f2f5] dark:bg-gray-800 hover:bg-[#e4e6eb] dark:hover:bg-gray-700 text-[#050505] dark:text-white transition-colors"
+                title="Cambiar tema"
+              >
+                {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+              </button>
+              <Link
+                href="/profile"
+                className="w-9 h-9 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white font-medium hover:opacity-90 transition-opacity flex-shrink-0"
+                title="Mi perfil"
+              >
+                {user?.username[0]?.toUpperCase() || '?'}
+              </Link>
+              <button
                 onClick={() => {
                   useAuthStore.getState().logout();
                   window.location.href = '/auth/login';
                 }}
-                className="p-2 rounded-full bg-[#f0f2f5] hover:bg-[#e4e6eb] text-[#050505] transition-colors"
+                className="p-2 rounded-full bg-[#f0f2f5] dark:bg-gray-800 hover:bg-[#e4e6eb] dark:hover:bg-gray-700 text-[#050505] dark:text-white transition-colors"
                 title="Cerrar sesión"
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -130,7 +167,7 @@ export function Sidebar() {
               value={sidebarSearch}
               onChange={e => setSidebarSearch(e.target.value)}
               placeholder="Buscar en Messenger"
-              className="w-full bg-[#f0f2f5] text-[#050505] placeholder-[#65676b] rounded-full py-2 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-[#0084ff]/50 text-[15px]"
+              className="w-full bg-[#f0f2f5] dark:bg-gray-800 text-[#050505] dark:text-white placeholder-[#65676b] dark:placeholder-gray-400 rounded-full py-2 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-[#0084ff]/50 text-[15px]"
             />
           </div>
         </div>
@@ -138,7 +175,7 @@ export function Sidebar() {
         {/* Lista de conversaciones */}
         <div className="flex-1 overflow-y-auto px-2">
           {conversations.length === 0 ? (
-            <div className="p-8 text-center text-[#65676b] text-[15px]">
+            <div className="p-8 text-center text-[#65676b] dark:text-gray-400 text-[15px]">
               {sidebarSearch.trim() ? (
                 <>Sin resultados para &ldquo;{sidebarSearch}&rdquo;</>
               ) : (
@@ -156,8 +193,8 @@ export function Sidebar() {
                   href={`/chat/${conv.id}`}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors flex-1 min-w-0 ${
                     activeConversationId === conv.id
-                      ? 'bg-[#e7f3ff]'
-                      : 'hover:bg-[#f0f2f5]'
+                      ? 'bg-[#e7f3ff] dark:bg-gray-800'
+                      : 'hover:bg-[#f0f2f5] dark:hover:bg-gray-800/40'
                   }`}
                 >
                   <div className="relative flex-shrink-0">
@@ -168,11 +205,11 @@ export function Sidebar() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className={`text-[15px] font-medium truncate ${
-                      activeConversationId === conv.id ? 'text-[#0084ff]' : 'text-[#050505]'
+                      activeConversationId === conv.id ? 'text-[#0084ff]' : 'text-[#050505] dark:text-white'
                     }`}>
                       {conv.otherUser.username}
                     </p>
-                    <p className="text-[#65676b] text-[13px] truncate">
+                    <p className="text-[#65676b] dark:text-gray-400 text-[13px] truncate">
                       {conv.lastMessageAt
                         ? `Último mensaje: ${new Date(conv.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
                         : 'Sin mensajes'}
@@ -180,7 +217,7 @@ export function Sidebar() {
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {isMuted(conv.mutedUntil) && (
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#65676b]">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#65676b] dark:text-gray-400">
                         <title>Silenciado</title>
                         <line x1="2" y1="2" x2="22" y2="22" />
                         <path d="M8.56 2.9A7 7 0 0 1 19 9v4m-2 4H3v-1l2-2V9a7 7 0 0 1 .78-3.22" />
@@ -210,13 +247,13 @@ export function Sidebar() {
 
       {/* Modal: Nuevo Chat */}
       {showNewChat && (
-        <div className="fixed inset-0 bg-white/70 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-xl border border-[#e4e6eb] w-full max-w-md p-6 shadow-2xl">
+        <div className="fixed inset-0 bg-white/70 dark:bg-black/70 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-900 rounded-xl border border-[#e4e6eb] dark:border-gray-800 w-full max-w-md p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[20px] font-bold text-[#050505]">Nuevo Chat</h2>
+              <h2 className="text-[20px] font-bold text-[#050505] dark:text-white">Nuevo Chat</h2>
               <button
                 onClick={() => { setShowNewChat(false); setSearchResults([]); setSearchQuery(''); }}
-                className="p-1 rounded-lg hover:bg-[#f0f2f5] text-[#65676b]"
+                className="p-1 rounded-lg hover:bg-[#f0f2f5] dark:hover:bg-gray-800 text-[#65676b] dark:text-gray-400"
               >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M18 6 6 18M6 6l12 12" />
@@ -231,7 +268,7 @@ export function Sidebar() {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && searchUsers()}
                 placeholder="Buscar por username..."
-                className="flex-1 px-4 py-2 rounded-full bg-[#f0f2f5] border border-transparent text-[#050505] placeholder-[#65676b] focus:outline-none focus:border-[#0084ff] text-[15px]"
+                className="flex-1 px-4 py-2 rounded-full bg-[#f0f2f5] dark:bg-gray-800 border border-transparent text-[#050505] dark:text-white placeholder-[#65676b] dark:placeholder-gray-400 focus:outline-none focus:border-[#0084ff] text-[15px]"
               />
               <button
                 onClick={searchUsers}
@@ -247,14 +284,14 @@ export function Sidebar() {
                   key={u.id}
                   onClick={() => createConversation(u)}
                   disabled={creating}
-                  className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-[#f0f2f5] transition-colors text-left disabled:opacity-50"
+                  className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-[#f0f2f5] dark:hover:bg-gray-800 transition-colors text-left disabled:opacity-50"
                 >
                   <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white font-medium">
                     {u.username[0]?.toUpperCase()}
                   </div>
                   <div className="flex-1">
-                    <p className="text-[#050505] text-[15px] font-medium">{u.username}</p>
-                    <p className="text-[#65676b] text-[13px]">
+                    <p className="text-[#050505] dark:text-white text-[15px] font-medium">{u.username}</p>
+                    <p className="text-[#65676b] dark:text-gray-400 text-[13px]">
                       {creating ? 'Generando claves DH...' : 'Click para iniciar chat cifrado'}
                     </p>
                   </div>
@@ -267,6 +304,24 @@ export function Sidebar() {
                 <p className="text-[#65676b] text-sm text-center py-4">No se encontraron usuarios</p>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {showContacts && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 font-sans" onClick={() => setShowContacts(false)}>
+          <div className="bg-[#1c1e21] rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+            <ContactsList onStartChat={async (userId) => {
+              setShowContacts(false);
+              const contact = contacts.find(c => c.friend?.id === userId);
+              if (contact && contact.friend) {
+                await createConversation({
+                  id: contact.friend.id,
+                  username: contact.friend.username,
+                  dh_public_key: contact.friend.dh_public_key,
+                });
+              }
+            }} />
           </div>
         </div>
       )}

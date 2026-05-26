@@ -38,7 +38,7 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className="min-h-screen bg-white dark:bg-gray-900 flex items-center justify-center">
         <div className="w-8 h-8 border-2 border-[#0084ff] border-t-transparent rounded-full animate-spin" />
       </div>
     );
@@ -48,7 +48,7 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
 
   return (
     <GlobalCallListenerWrapper userId={user.id}>
-      <div className="h-screen overflow-hidden bg-white flex text-[#050505]">
+      <div className="h-screen overflow-hidden bg-white dark:bg-gray-900 flex text-[#050505] dark:text-white">
         <IncomingCallBanner />
         <Sidebar />
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">

@@ -19,14 +19,18 @@ export function useAuth() {
     if (savedToken && savedUser) {
       try {
         const parsedUser = JSON.parse(savedUser);
+        // Calcular storageKey antes de setAuth para que esté disponible
+        // en el mismo render cycle y no cause "storageKey not available"
+        const storageKey = pbkdf2(parsedUser.id, 'storage-salt', 1000, 32);
         setAuth(parsedUser, savedToken);
+        setKeys(new Uint8Array(0), new Uint8Array(0), storageKey);
       } catch {
         logout();
       }
     } else {
       setLoading(false);
     }
-  }, [setAuth, logout, setLoading]);
+  }, [setAuth, setKeys, logout, setLoading]);
 
   const register = useCallback(async (
     email: string,

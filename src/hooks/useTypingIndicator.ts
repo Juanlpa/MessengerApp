@@ -27,6 +27,7 @@ export function useTypingIndicator(
 ) {
   const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const subscribedRef = useRef(false);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSentRef = useRef<number>(0);
 
@@ -38,7 +39,11 @@ export function useTypingIndicator(
       .filter(ch => ch.topic === `realtime:typing:${conversationId}`)
       .forEach(ch => supabase.removeChannel(ch));
 
-    const channel = supabase.channel(`typing:${conversationId}`);
+    subscribedRef.current = false;
+    lastSentRef.current = 0;
+    const channel = supabase.channel(`typing:${conversationId}`, {
+      config: { broadcast: { self: false } },
+    });
 
     channel
       .on('broadcast', { event: 'typing' }, (payload) => {
@@ -59,7 +64,9 @@ export function useTypingIndicator(
         const { userId: typerId } = payload.payload as { userId: string };
         setTypingUsers(prev => prev.filter(u => u.userId !== typerId));
       })
-      .subscribe();
+      .subscribe((status) => {
+        subscribedRef.current = status === 'SUBSCRIBED';
+      });
 
     channelRef.current = channel;
 
@@ -73,6 +80,9 @@ export function useTypingIndicator(
 
     return () => {
       clearInterval(cleanup);
+      subscribedRef.current = false;
+      channelRef.current = null;
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       supabase.removeChannel(channel);
     };
   }, [conversationId, userId]);
@@ -82,6 +92,17 @@ export function useTypingIndicator(
    * Throttled a 1 evento cada 2 segundos para no saturar
    */
   const sendTyping = useCallback(() => {
+    if (!userId || !username || !subscribedRef.current) return;
+
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'stop_typing',
+        payload: { userId },
+      });
+    }, TYPING_TIMEOUT);
+
     const now = Date.now();
     if (now - lastSentRef.current < 2000) return; // Throttle 2s
     lastSentRef.current = now;
@@ -92,15 +113,6 @@ export function useTypingIndicator(
       payload: { userId, username },
     });
 
-    // Auto-enviar stop_typing después del timeout
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    typingTimeoutRef.current = setTimeout(() => {
-      channelRef.current?.send({
-        type: 'broadcast',
-        event: 'stop_typing',
-        payload: { userId },
-      });
-    }, TYPING_TIMEOUT);
   }, [userId, username]);
 
   /**
@@ -108,6 +120,8 @@ export function useTypingIndicator(
    */
   const stopTyping = useCallback(() => {
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = null;
+    if (!userId || !subscribedRef.current) return;
     channelRef.current?.send({
       type: 'broadcast',
       event: 'stop_typing',

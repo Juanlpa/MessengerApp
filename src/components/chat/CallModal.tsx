@@ -122,6 +122,16 @@ export function CallModal({
     return () => clearInterval(t);
   }, [callState]);
 
+  // Cerrar paneles flotantes cuando la llamada termina (no persistir entre llamadas)
+  useEffect(() => {
+    if (callState === 'idle') {
+      setShowContacts(false);
+      setShowFilterPanel(false);
+      setSearch('');
+      setContacts([]);
+    }
+  }, [callState]);
+
   const handleOpenContacts = useCallback(async () => {
     // Only abort if there's a pending in-flight request (panel re-opened quickly)
     contactsAbortRef.current?.abort();
@@ -230,10 +240,11 @@ export function CallModal({
           className={`w-full h-full object-cover ${(isAudioOnly || isTerminal) ? 'hidden' : ''}`}
         />
 
-        {/* Local video PiP — shifts left when contact panel is open */}
+        {/* Local video PiP — se mueve a la esquina inferior izquierda cuando se abre el panel
+            de contactos (para no superponerse ni con el header ni con la barra de controles). */}
         {showLocalVideo && (
-          <div className={`absolute bottom-6 w-48 aspect-video bg-gray-800 rounded-lg overflow-hidden shadow-lg border border-gray-700 transition-all duration-200 ${
-            showContacts ? 'right-[304px]' : 'right-6'
+          <div className={`absolute aspect-video bg-gray-800 rounded-lg overflow-hidden shadow-lg border border-gray-700 transition-all duration-200 ${
+            showContacts ? 'bottom-6 left-6 w-36' : 'bottom-6 right-6 w-48'
           }`}>
             <video
               ref={localVideoRef}
@@ -309,9 +320,16 @@ export function CallModal({
                   </button>
                 </div>
               ) : onlineContacts.length === 0 && offlineContacts.length === 0 ? (
-                <p className="text-gray-500 text-sm text-center py-8">
-                  {search ? 'Sin resultados' : 'Sin contactos'}
-                </p>
+                <div className="flex flex-col items-center gap-2 py-8 px-4">
+                  <p className="text-gray-400 text-sm text-center">
+                    {search ? 'Sin resultados' : 'Aún no tienes amigos'}
+                  </p>
+                  {!search && (
+                    <p className="text-gray-500 text-xs text-center">
+                      Agrega contactos desde la lista de chats para poder invitarlos a llamadas
+                    </p>
+                  )}
+                </div>
               ) : (
                 <>
                   {onlineContacts.length > 0 && (
@@ -363,8 +381,10 @@ export function CallModal({
           />
         )}
 
-        {/* Overlay: header + controls */}
-        <div className="absolute inset-0 flex flex-col justify-between p-6 pointer-events-none">
+        {/* Overlay: header + controls — se reduce al abrir el panel de contactos */}
+        <div className={`absolute inset-y-0 left-0 flex flex-col justify-between p-6 pointer-events-none transition-all duration-200 ${
+          showContacts ? 'right-72' : 'right-0'
+        }`}>
 
           {/* Header */}
           <div className="text-center pointer-events-none">

@@ -175,7 +175,7 @@ function MessageTileInner({
           <div
             className={`${
               msg.isDeleted
-                ? 'px-4 py-2 bg-transparent border border-[#e4e6eb] text-[#65676b] italic rounded-[20px]'
+                ? 'px-4 py-2 bg-transparent border border-[#e4e6eb] dark:border-gray-700 text-[#65676b] dark:text-gray-400 italic rounded-[20px]'
                 : hasAttachment
                   ? 'px-1.5 py-1.5'
                   : 'px-4 py-2'
@@ -183,13 +183,13 @@ function MessageTileInner({
               !msg.isDeleted && !hasAttachment
                 ? isMe
                   ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
-                  : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
+                  : 'bg-[#e4e6eb] dark:bg-gray-700 text-[#050505] dark:text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
                 : ''
             } ${
               hasAttachment
                 ? isMe
                   ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
-                  : 'bg-[#e4e6eb] text-[#050505] rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
+                  : 'bg-[#e4e6eb] dark:bg-gray-700 text-[#050505] dark:text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
                 : ''
             }`}
             style={{ wordBreak: 'break-word' }}

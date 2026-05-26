@@ -9,6 +9,14 @@ export interface BroadcastPayload {
   senderId: string;
   e2e: { ciphertext: string; iv: string; mac: string };
   createdAt: string;
+  replyToId?: string | null;
+  replyToSnapshot?: {
+    id: string;
+    senderId: string;
+    createdAt: string;
+    text?: string;
+    isDeleted?: boolean;
+  } | null;
   messageType?: string;
   attachment?: {
     id: string;
@@ -19,6 +27,11 @@ export interface BroadcastPayload {
     durationMs?: number | null;
     waveformData?: number[];
   } | null;
+}
+
+export interface ReactionBroadcastPayload {
+  messageId: string;
+  senderId: string;
 }
 
 interface UseRealtimeMessagesOptions {
@@ -33,6 +46,13 @@ interface UseRealtimeMessagesOptions {
     e2e: { ciphertext: string; iv: string; mac: string } | null;
     createdAt: string;
     replyToId?: string | null;
+    replyToSnapshot?: {
+      id: string;
+      senderId: string;
+      createdAt: string;
+      text?: string;
+      isDeleted?: boolean;
+    } | null;
     messageType?: string;
     attachment?: {
       id: string;
@@ -60,23 +80,50 @@ export function useRealtimeMessages({
   onReactionsUpdated,
 }: UseRealtimeMessagesOptions) {
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const subscribedRef = useRef(false);
+  const pendingBroadcastsRef = useRef<Array<{
+    event: 'new_message';
+    payload: BroadcastPayload;
+  } | {
+    event: 'reaction_updated';
+    payload: ReactionBroadcastPayload;
+  }>>([]);
   const deliveryQueueRef = useRef<string[]>([]);
   const deliveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Refs para callbacks — evita recrear el canal cuando cambian las funciones
   const sharedKeyRef = useRef(sharedKey);
-  sharedKeyRef.current = sharedKey;
   const tokenRef = useRef(token);
-  tokenRef.current = token;
-  
   const onNewMessageRef = useRef(onNewMessage);
-  onNewMessageRef.current = onNewMessage;
   const onMessageStatusUpdateRef = useRef(onMessageStatusUpdate);
-  onMessageStatusUpdateRef.current = onMessageStatusUpdate;
   const onMessageUpdatedRef = useRef(onMessageUpdated);
-  onMessageUpdatedRef.current = onMessageUpdated;
   const onReactionsUpdatedRef = useRef(onReactionsUpdated);
-  onReactionsUpdatedRef.current = onReactionsUpdated;
+
+  useEffect(() => {
+    sharedKeyRef.current = sharedKey;
+    tokenRef.current = token;
+    onNewMessageRef.current = onNewMessage;
+    onMessageStatusUpdateRef.current = onMessageStatusUpdate;
+    onMessageUpdatedRef.current = onMessageUpdated;
+    onReactionsUpdatedRef.current = onReactionsUpdated;
+  }, [
+    sharedKey,
+    token,
+    onNewMessage,
+    onMessageStatusUpdate,
+    onMessageUpdated,
+    onReactionsUpdated,
+  ]);
+
+  const flushPendingBroadcasts = useCallback(() => {
+    const channel = channelRef.current;
+    if (!channel || !subscribedRef.current) return;
+
+    const pending = pendingBroadcastsRef.current.splice(0);
+    pending.forEach(({ event, payload }) => {
+      void channel.send({ type: 'broadcast', event, payload });
+    });
+  }, []);
 
   useEffect(() => {
     if (!conversationId || !token) return;
@@ -84,7 +131,7 @@ export function useRealtimeMessages({
     // Limpiar canales previos con el mismo nombre
     const topic = `realtime:conv:${conversationId}`;
     supabase.getChannels()
-      .filter(ch => ch.topic === topic || ch.topic.includes(conversationId))
+      .filter(ch => ch.topic === topic)
       .forEach(ch => supabase.removeChannel(ch));
 
     // Canal único consolidador 'conv:${conversationId}'
@@ -105,6 +152,8 @@ export function useRealtimeMessages({
             text,
             e2e: payload.e2e,
             createdAt: payload.createdAt,
+            replyToId: payload.replyToId ?? null,
+            replyToSnapshot: payload.replyToSnapshot ?? null,
             messageType: payload.messageType,
             attachment: payload.attachment ?? null,
           });
@@ -115,6 +164,8 @@ export function useRealtimeMessages({
             text: '[Error al descifrar]',
             e2e: null,
             createdAt: payload.createdAt,
+            replyToId: payload.replyToId ?? null,
+            replyToSnapshot: payload.replyToSnapshot ?? null,
           });
         }
 
@@ -131,6 +182,12 @@ export function useRealtimeMessages({
               body: JSON.stringify({ messageIds: ids, status: 'delivered' }),
             }).catch(() => {});
           }, 200);
+        }
+      })
+      .on('broadcast', { event: 'reaction_updated' }, ({ payload }: { payload: ReactionBroadcastPayload }) => {
+        if (payload.senderId === userId) return;
+        if (payload.messageId && onReactionsUpdatedRef.current) {
+          onReactionsUpdatedRef.current(payload.messageId);
         }
       })
       // 2. Escuchar UPDATEs de mensajes (ediciones y eliminaciones soft-delete)
@@ -203,11 +260,20 @@ export function useRealtimeMessages({
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          subscribedRef.current = true;
+          flushPendingBroadcasts();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          subscribedRef.current = false;
+        }
+      });
 
     channelRef.current = channel;
 
     return () => {
+      subscribedRef.current = false;
+      pendingBroadcastsRef.current = [];
       supabase.removeChannel(channel);
       channelRef.current = null;
       if (deliveryTimerRef.current) {
@@ -216,13 +282,34 @@ export function useRealtimeMessages({
       }
       deliveryQueueRef.current = [];
     };
-  }, [conversationId, userId, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [conversationId, userId, token, flushPendingBroadcasts]);
 
-  const broadcastMessage = useCallback((payload: BroadcastPayload) => {
-    channelRef.current?.send({ type: 'broadcast', event: 'new_message', payload });
+  const sendOrQueueBroadcast = useCallback((
+    event: 'new_message' | 'reaction_updated',
+    payload: BroadcastPayload | ReactionBroadcastPayload
+  ) => {
+    const channel = channelRef.current;
+    if (channel && subscribedRef.current) {
+      void channel.send({ type: 'broadcast', event, payload });
+      return;
+    }
+
+    pendingBroadcastsRef.current.push(
+      event === 'new_message'
+        ? { event, payload: payload as BroadcastPayload }
+        : { event, payload: payload as ReactionBroadcastPayload }
+    );
   }, []);
 
-  return { broadcastMessage };
+  const broadcastMessage = useCallback((payload: BroadcastPayload) => {
+    sendOrQueueBroadcast('new_message', payload);
+  }, [sendOrQueueBroadcast]);
+
+  const broadcastReaction = useCallback((payload: ReactionBroadcastPayload) => {
+    sendOrQueueBroadcast('reaction_updated', payload);
+  }, [sendOrQueueBroadcast]);
+
+  return { broadcastMessage, broadcastReaction };
 }
 
 /**

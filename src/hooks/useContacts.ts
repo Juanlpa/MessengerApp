@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { supabase } from '@/lib/supabase/client';
 
@@ -79,12 +79,27 @@ export function usePendingRequests() {
 
   useEffect(() => { fetchPending(); }, [fetchPending]);
 
+  const fetchPendingRef = useRef(fetchPending);
+  useEffect(() => {
+    fetchPendingRef.current = fetchPending;
+  }, [fetchPending]);
+
   // Suscripción Realtime: notificar cuando llega nueva solicitud al usuario actual
   useEffect(() => {
     if (!user?.id) return;
 
+    const channelName = `friendships:addressee:${user.id}`;
+    
+    // Eliminar canal previo en caché para evitar error de colisión en re-suscripciones rápidas
+    const existing = supabase.getChannels().find(
+      (ch: any) => ch.topic === `realtime:${channelName}` || ch.topic === channelName
+    );
+    if (existing) {
+      supabase.removeChannel(existing);
+    }
+
     const channel = supabase
-      .channel(`friendships:addressee:${user.id}`)
+      .channel(channelName)
       .on(
         'postgres_changes',
         {
@@ -93,12 +108,12 @@ export function usePendingRequests() {
           table: 'friendships',
           filter: `addressee_id=eq.${user.id}`,
         },
-        () => { fetchPending(); }
+        () => { fetchPendingRef.current(); }
       )
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [user?.id, fetchPending]);
+  }, [user?.id]);
 
   return { requests, loading, refetch: fetchPending };
 }

@@ -14,6 +14,35 @@ import { sendPushNotification, type PushSubscription, type PushPayload } from '@
 
 type RouteContext = { params: Promise<{ id: string }> };
 
+type AttachmentRow = {
+  id: string;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  attachment_type: 'image' | 'voice' | 'file';
+  duration_ms: number | null;
+  waveform_data: string | null;
+};
+
+type MessageRow = {
+  id: string;
+  sender_id: string;
+  server_ciphertext: string;
+  server_iv: string;
+  server_mac_tag: string;
+  created_at: string;
+  reply_to_id: string | null;
+  edited_at: string | null;
+  is_deleted: boolean;
+  message_type: 'text' | 'voice' | 'image' | 'file' | null;
+  attachment: AttachmentRow | null;
+};
+
+type ReplyRow = Pick<
+  MessageRow,
+  'id' | 'sender_id' | 'server_ciphertext' | 'server_iv' | 'server_mac_tag' | 'created_at' | 'is_deleted'
+>;
+
 export async function GET(request: NextRequest, context: RouteContext) {
   const user = getUserFromRequest(request);
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -57,14 +86,73 @@ export async function GET(request: NextRequest, context: RouteContext) {
   }
 
   const hasMore = (rawMessages || []).length > limit;
-  const messages = hasMore ? (rawMessages || []).slice(0, limit) : (rawMessages || []);
+  const messages = (hasMore ? (rawMessages || []).slice(0, limit) : (rawMessages || [])) as MessageRow[];
   
   // Volver a orden cronológico ascendente para el cliente
   messages.reverse();
 
+  const replyIds = Array.from(new Set(
+    messages
+      .map((msg) => msg.reply_to_id)
+      .filter((id): id is string => Boolean(id))
+  ));
+  const loadedIds = new Set(messages.map((msg) => msg.id));
+  const missingReplyIds = replyIds.filter(id => !loadedIds.has(id));
+  const replySnapshots = new Map<string, ReplyRow>();
+
+  if (missingReplyIds.length > 0) {
+    const { data: rawReplies } = await supabase
+      .from('messages')
+      .select('id, sender_id, server_ciphertext, server_iv, server_mac_tag, created_at, is_deleted')
+      .eq('conversation_id', conversationId)
+      .in('id', missingReplyIds);
+
+    ((rawReplies || []) as ReplyRow[]).forEach((reply) => {
+      replySnapshots.set(reply.id, reply);
+    });
+  }
+
   // Quitar Capa 2 (at-rest) de cada mensaje
   const masterKey = getServerMasterKey();
-  const decryptedMessages = messages.map((msg: any) => {
+  const buildReplySnapshot = (replyToId: string | null) => {
+    if (!replyToId) return null;
+    const reply = replySnapshots.get(replyToId);
+    if (!reply) return null;
+
+    if (reply.is_deleted) {
+      return {
+        id: reply.id,
+        senderId: reply.sender_id,
+        e2e: null,
+        createdAt: reply.created_at,
+        isDeleted: true,
+      };
+    }
+
+    try {
+      const e2eCiphertext = decryptMessageAtRest(
+        { ciphertext: reply.server_ciphertext, iv: reply.server_iv, mac: reply.server_mac_tag },
+        masterKey
+      );
+      const e2eData = JSON.parse(e2eCiphertext);
+      return {
+        id: reply.id,
+        senderId: reply.sender_id,
+        e2e: {
+          ciphertext: e2eData.ciphertext,
+          iv: e2eData.iv,
+          mac: e2eData.mac,
+        },
+        createdAt: reply.created_at,
+        isDeleted: false,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const decryptedMessages = messages.map((msg) => {
+    const replyToSnapshot = buildReplySnapshot(msg.reply_to_id ?? null);
     // Mensajes eliminados: devolver marcador sin contenido
     if (msg.is_deleted) {
       return {
@@ -74,6 +162,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
         createdAt: msg.created_at,
         isDeleted: true,
         replyToId: msg.reply_to_id ?? null,
+        replyToSnapshot,
         editedAt: msg.edited_at ?? null,
         messageType: msg.message_type || 'text',
         attachment: null,
@@ -85,7 +174,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
         masterKey
       );
       const e2eData = JSON.parse(e2eCiphertext);
-      const att = msg.attachment as any;
+      const att = msg.attachment;
       return {
         id: msg.id,
         senderId: msg.sender_id,
@@ -97,6 +186,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
         createdAt: msg.created_at,
         isDeleted: false,
         replyToId: msg.reply_to_id ?? null,
+        replyToSnapshot,
         editedAt: msg.edited_at ?? null,
         messageType: msg.message_type || 'text',
         attachment: att ? {
@@ -118,6 +208,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
         createdAt: msg.created_at,
         isDeleted: false,
         replyToId: msg.reply_to_id ?? null,
+        replyToSnapshot,
         editedAt: msg.edited_at ?? null,
         messageType: msg.message_type || 'text',
         attachment: null,
