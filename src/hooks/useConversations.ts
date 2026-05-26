@@ -29,7 +29,7 @@ export interface Conversation {
 }
 
 export function useConversations(showArchived = false) {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

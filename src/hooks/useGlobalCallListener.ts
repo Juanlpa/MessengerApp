@@ -22,6 +22,7 @@ export function useGlobalCallListener(userId: string) {
           conversationId: payload.conversationId,
           callerId: payload.callerId,
           callerName: payload.callerName,
+          isAudioOnly: payload.isAudioOnly ?? false,
         });
       })
       .on('broadcast', { event: 'call-cancelled' }, () => {

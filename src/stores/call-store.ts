@@ -6,6 +6,7 @@ interface IncomingCall {
   conversationId: string;
   callerId: string;
   callerName: string;
+  isAudioOnly?: boolean;
 }
 
 interface CallStore {

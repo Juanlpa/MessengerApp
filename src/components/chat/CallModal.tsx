@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Shield, ShieldAlert, UserPlus, X, Search, Sparkles } from 'lucide-react';
 import { CallState } from '@/hooks/useWebRTC';
 import { VideoFilterPanel } from '@/components/calls/VideoFilterPanel';
@@ -26,10 +26,49 @@ interface CallModalProps {
   isE2EMedia?: boolean;
   token?: string;
   onAddParticipant?: (contactId: string, contactName: string) => Promise<void>;
+  onDismiss?: () => void;
+  isUserOnline?: (id: string) => boolean;
   activeFilter?: FilterId;
   activeBackground?: BackgroundId;
   onFilterChange?: (f: FilterId) => void;
   onBackgroundChange?: (bg: BackgroundId) => void;
+}
+
+function ContactRow({
+  contact,
+  isOnline,
+  invitingId,
+  onInvite,
+}: {
+  contact: Contact;
+  isOnline: boolean;
+  invitingId: string | null;
+  onInvite: (c: Contact) => void;
+}) {
+  return (
+    <button
+      onClick={() => onInvite(contact)}
+      disabled={!!invitingId}
+      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-800 transition-colors text-left disabled:opacity-50"
+    >
+      <div className="relative flex-shrink-0">
+        <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white text-sm font-semibold">
+          {contact.username[0]?.toUpperCase() || '?'}
+        </div>
+        <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-gray-900 ${
+          isOnline ? 'bg-green-400' : 'bg-gray-500'
+        }`} />
+      </div>
+      <span className={`text-sm flex-1 truncate ${isOnline ? 'text-white' : 'text-gray-400'}`}>
+        {contact.username}
+      </span>
+      {invitingId === contact.id ? (
+        <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+      ) : (
+        <UserPlus className="w-4 h-4 text-gray-400 flex-shrink-0" />
+      )}
+    </button>
+  );
 }
 
 const STATE_LABELS: Partial<Record<CallState, string>> = {
@@ -57,6 +96,8 @@ export function CallModal({
   isE2EMedia = false,
   token,
   onAddParticipant,
+  onDismiss,
+  isUserOnline,
   activeFilter = 'none',
   activeBackground = 'none',
   onFilterChange,
@@ -66,29 +107,48 @@ export function CallModal({
   const [showFilterPanel, setShowFilterPanel] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loadingContacts, setLoadingContacts] = useState(false);
+  const [contactsError, setContactsError] = useState(false);
   const [search, setSearch] = useState('');
   const [invitingId, setInvitingId] = useState<string | null>(null);
   const contactsAbortRef = useRef<AbortController | null>(null);
+  const [callSeconds, setCallSeconds] = useState(0);
+
+  useEffect(() => {
+    if (callState !== 'connected') {
+      setCallSeconds(0);
+      return;
+    }
+    const t = setInterval(() => setCallSeconds(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [callState]);
 
   const handleOpenContacts = useCallback(async () => {
+    // Only abort if there's a pending in-flight request (panel re-opened quickly)
     contactsAbortRef.current?.abort();
     const controller = new AbortController();
     contactsAbortRef.current = controller;
     setShowContacts(true);
+    setContactsError(false);
     setLoadingContacts(true);
     try {
       const res = await fetch('/api/contacts', {
         headers: { Authorization: `Bearer ${token}` },
         signal: controller.signal,
       });
-      const data = await res.json();
       if (!controller.signal.aborted) {
-        const list: Contact[] = (data.contacts ?? []).map(
-          (c: { friend: Contact }) => c.friend
-        );
-        setContacts(list);
+        if (!res.ok) {
+          setContactsError(true);
+        } else {
+          const data = await res.json();
+          const list: Contact[] = (data.contacts ?? [])
+            .map((c: { friend: Contact | null }) => c.friend)
+            .filter(Boolean) as Contact[];
+          setContacts(list);
+        }
       }
-    } catch {}
+    } catch (e) {
+      if (!controller.signal.aborted) setContactsError(true);
+    }
     if (!controller.signal.aborted) setLoadingContacts(false);
   }, [token]);
 
@@ -102,22 +162,33 @@ export function CallModal({
     setContacts([]); // force refresh next open so the list stays current
   }, [onAddParticipant, invitingId]);
 
+  // Must be before any conditional return (Rules of Hooks)
+  const { onlineContacts, offlineContacts } = useMemo(() => {
+    const filtered = contacts.filter(c =>
+      c.username.toLowerCase().includes(search.toLowerCase())
+    );
+    if (!isUserOnline) return { onlineContacts: filtered, offlineContacts: [] };
+    return {
+      onlineContacts: filtered.filter(c => isUserOnline(c.id)),
+      offlineContacts: filtered.filter(c => !isUserOnline(c.id)),
+    };
+  }, [contacts, search, isUserOnline]);
+
   if (callState === 'idle') return null;
 
   const showLocalVideo = !isAudioOnly && (callState === 'connected' || callState === 'calling');
   const isTerminal = callState === 'ended' || callState === 'declined' || callState === 'missed' || callState === 'failed';
   const showControls = callState === 'calling' || callState === 'connected' || callState === 'reconnecting';
 
-  const filteredContacts = useMemo(
-    () => contacts.filter(c => c.username.toLowerCase().includes(search.toLowerCase())),
-    [contacts, search]
-  );
-
   const statusLabel = (() => {
     if (callState === 'receiving') {
       return isAudioOnly ? 'Llamada de voz entrante...' : 'Videollamada entrante...';
     }
-    if (callState === 'connected') return 'Llamada en curso';
+    if (callState === 'connected') {
+      const m = Math.floor(callSeconds / 60).toString().padStart(2, '0');
+      const s = (callSeconds % 60).toString().padStart(2, '0');
+      return `${m}:${s}`;
+    }
     return STATE_LABELS[callState] ?? '';
   })();
 
@@ -159,9 +230,11 @@ export function CallModal({
           className={`w-full h-full object-cover ${(isAudioOnly || isTerminal) ? 'hidden' : ''}`}
         />
 
-        {/* Local video PiP — only during video calls */}
+        {/* Local video PiP — shifts left when contact panel is open */}
         {showLocalVideo && (
-          <div className="absolute bottom-6 right-6 w-48 aspect-video bg-gray-800 rounded-lg overflow-hidden shadow-lg border border-gray-700">
+          <div className={`absolute bottom-6 w-48 aspect-video bg-gray-800 rounded-lg overflow-hidden shadow-lg border border-gray-700 transition-all duration-200 ${
+            showContacts ? 'right-[304px]' : 'right-6'
+          }`}>
             <video
               ref={localVideoRef}
               autoPlay
@@ -170,6 +243,17 @@ export function CallModal({
               className="w-full h-full object-cover"
             />
           </div>
+        )}
+
+        {/* Terminal state dismiss button */}
+        {isTerminal && onDismiss && (
+          <button
+            onClick={onDismiss}
+            className="absolute top-4 right-4 z-20 w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white transition-colors"
+            title="Cerrar"
+          >
+            <X className="w-4 h-4" />
+          </button>
         )}
 
         {/* Reconnecting spinner overlay */}
@@ -188,7 +272,7 @@ export function CallModal({
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
               <span className="text-white font-semibold text-sm">Añadir participante</span>
               <button
-                onClick={() => { setShowContacts(false); setSearch(''); }}
+                onClick={() => { setShowContacts(false); setSearch(''); setContactsError(false); }}
                 className="text-gray-400 hover:text-white transition-colors"
               >
                 <X className="w-4 h-4" />
@@ -214,29 +298,55 @@ export function CallModal({
                 <div className="flex items-center justify-center py-8">
                   <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
                 </div>
-              ) : filteredContacts.length === 0 ? (
+              ) : contactsError ? (
+                <div className="flex flex-col items-center gap-3 py-8 px-4">
+                  <p className="text-gray-400 text-sm text-center">No se pudieron cargar los contactos</p>
+                  <button
+                    onClick={handleOpenContacts}
+                    className="text-blue-400 text-sm hover:text-blue-300 transition-colors"
+                  >
+                    Reintentar
+                  </button>
+                </div>
+              ) : onlineContacts.length === 0 && offlineContacts.length === 0 ? (
                 <p className="text-gray-500 text-sm text-center py-8">
                   {search ? 'Sin resultados' : 'Sin contactos'}
                 </p>
               ) : (
-                filteredContacts.map((contact) => (
-                  <button
-                    key={contact.id}
-                    onClick={() => handleInvite(contact)}
-                    disabled={!!invitingId}
-                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-800 transition-colors text-left disabled:opacity-50"
-                  >
-                    <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white text-sm font-semibold flex-shrink-0">
-                      {contact.username[0]?.toUpperCase() || '?'}
-                    </div>
-                    <span className="text-white text-sm flex-1 truncate">{contact.username}</span>
-                    {invitingId === contact.id ? (
-                      <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-                    ) : (
-                      <UserPlus className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                    )}
-                  </button>
-                ))
+                <>
+                  {onlineContacts.length > 0 && (
+                    <>
+                      <div className="px-4 py-2 text-[11px] text-gray-500 font-semibold uppercase tracking-wide">
+                        En línea — {onlineContacts.length}
+                      </div>
+                      {onlineContacts.map((contact) => (
+                        <ContactRow
+                          key={contact.id}
+                          contact={contact}
+                          isOnline={true}
+                          invitingId={invitingId}
+                          onInvite={handleInvite}
+                        />
+                      ))}
+                    </>
+                  )}
+                  {offlineContacts.length > 0 && (
+                    <>
+                      <div className="px-4 py-2 text-[11px] text-gray-500 font-semibold uppercase tracking-wide">
+                        Desconectados — {offlineContacts.length}
+                      </div>
+                      {offlineContacts.map((contact) => (
+                        <ContactRow
+                          key={contact.id}
+                          contact={contact}
+                          isOnline={false}
+                          invitingId={invitingId}
+                          onInvite={handleInvite}
+                        />
+                      ))}
+                    </>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -345,11 +455,11 @@ export function CallModal({
                   <button
                     onClick={() => setShowFilterPanel(s => !s)}
                     className={`p-3 rounded-full transition-colors shadow-lg ${
-                      showFilterPanel || activeFilter !== 'none'
+                      showFilterPanel || activeFilter !== 'none' || activeBackground !== 'none'
                         ? 'bg-[#0084ff] hover:bg-[#0070d8]'
                         : 'bg-gray-700 hover:bg-gray-600'
                     } text-white`}
-                    title="Filtros de video"
+                    title="Efectos de video"
                   >
                     <Sparkles className="w-5 h-5" />
                   </button>

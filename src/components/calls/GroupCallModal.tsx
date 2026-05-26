@@ -110,6 +110,14 @@ export function GroupCallModal({
   onBackgroundChange,
 }: Props) {
   const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const [callSeconds, setCallSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!isOpen) { setCallSeconds(0); return; }
+    const t = setInterval(() => setCallSeconds(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const participantList = Array.from(participants.values());
@@ -128,7 +136,9 @@ export function GroupCallModal({
       <div className="flex items-center justify-between px-5 py-3 bg-black/30">
         <div>
           <p className="text-white font-semibold text-[15px]">{groupName}</p>
-          <p className="text-[#b0b3b8] text-[13px]">{total} participante{total !== 1 ? 's' : ''}</p>
+          <p className="text-[#b0b3b8] text-[13px]">
+            {total} participante{total !== 1 ? 's' : ''} · {String(Math.floor(callSeconds / 60)).padStart(2, '0')}:{String(callSeconds % 60).padStart(2, '0')}
+          </p>
         </div>
         <div className="flex items-center gap-1 text-green-400">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -143,26 +153,32 @@ export function GroupCallModal({
       <div className={`flex-1 grid ${gridClass} gap-2 p-3 overflow-hidden`}>
         {/* Video local (siempre primero) */}
         <div className="relative rounded-xl overflow-hidden bg-[#1a1a2e] flex items-center justify-center">
-          <video
-            ref={localVideoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full h-full object-cover"
-          />
-          <div className="absolute bottom-2 left-2">
+          {isVideoMuted ? (
+            <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white text-2xl font-semibold">
+              {groupName[0]?.toUpperCase() || 'T'}
+            </div>
+          ) : (
+            <video
+              ref={localVideoRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full h-full object-cover"
+            />
+          )}
+          <div className="absolute bottom-2 left-2 flex items-center gap-1.5">
             <span className="text-white text-[13px] font-medium bg-black/40 px-2 py-0.5 rounded-full">
               Tú
             </span>
+            {isAudioMuted && (
+              <div className="bg-red-500/80 rounded-full p-0.5">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="white">
+                  <line x1="2" y1="2" x2="22" y2="22" stroke="white" strokeWidth="3" />
+                  <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" />
+                </svg>
+              </div>
+            )}
           </div>
-          {isAudioMuted && (
-            <div className="absolute bottom-2 right-2 bg-red-500/80 rounded-full p-1">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="white">
-                <line x1="2" y1="2" x2="22" y2="22" stroke="white" strokeWidth="3" />
-                <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" />
-              </svg>
-            </div>
-          )}
         </div>
 
         {/* Tiles de otros participantes */}
@@ -171,17 +187,15 @@ export function GroupCallModal({
         ))}
       </div>
 
-      {/* Filter panel — floats above the controls bar */}
+      {/* Filter panel — positioned absolute inside the fixed root container */}
       {showFilterPanel && onFilterChange && onBackgroundChange && (
-        <div className="relative">
-          <VideoFilterPanel
-            activeFilter={activeFilter}
-            activeBackground={activeBackground}
-            onFilterChange={onFilterChange}
-            onBackgroundChange={onBackgroundChange}
-            onClose={() => setShowFilterPanel(false)}
-          />
-        </div>
+        <VideoFilterPanel
+          activeFilter={activeFilter}
+          activeBackground={activeBackground}
+          onFilterChange={onFilterChange}
+          onBackgroundChange={onBackgroundChange}
+          onClose={() => setShowFilterPanel(false)}
+        />
       )}
 
       {/* Barra de controles */}
@@ -235,11 +249,11 @@ export function GroupCallModal({
           <button
             onClick={() => setShowFilterPanel(s => !s)}
             className={`w-14 h-14 rounded-full flex items-center justify-center transition-colors ${
-              showFilterPanel || activeFilter !== 'none'
+              showFilterPanel || activeFilter !== 'none' || activeBackground !== 'none'
                 ? 'bg-[#0084ff] hover:bg-[#0070d8]'
                 : 'bg-white/20 hover:bg-white/30'
             }`}
-            title="Filtros de video"
+            title="Efectos de video"
           >
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5">
               <path d="M12 2L9.09 8.26L2 9.27L7 14.14L5.82 21.02L12 17.77L18.18 21.02L17 14.14L22 9.27L14.91 8.26L12 2Z"/>

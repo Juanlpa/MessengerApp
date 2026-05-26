@@ -131,7 +131,8 @@ const MessageTile = memo(function MessageTile({
 export default function ConversationPage() {
   const params = useParams();
   const conversationId = params.conversationId as string;
-  const { user, token } = useAuthStore();
+  const user = useAuthStore(s => s.user);
+  const token = useAuthStore(s => s.token);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
@@ -185,6 +186,7 @@ export default function ConversationPage() {
     acceptCall,
     rejectCall,
     endCall,
+    forceIdle,
     inviteToCall,
     toggleAudio,
     toggleVideo,
@@ -606,6 +608,8 @@ export default function ConversationPage() {
           isE2EMedia={isE2EMedia}
           token={token || undefined}
           onAddParticipant={handleAddParticipant}
+          onDismiss={forceIdle}
+          isUserOnline={isUserOnline}
           activeFilter={activeFilter}
           activeBackground={activeBackground}
           onFilterChange={setFilter}
@@ -721,7 +725,7 @@ export default function ConversationPage() {
               onClearError={clearAttachError}
               disabled={!sharedKey}
             />
-            <div className="flex-1 bg-[#f0f2f5] rounded-3xl flex items-center pr-2">
+            <div className="flex-1 bg-[#f0f2f5] rounded-3xl flex items-center">
               <input
                 type="text"
                 value={newMessage}
@@ -731,14 +735,6 @@ export default function ConversationPage() {
                 className="flex-1 px-4 py-2 bg-transparent text-[#050505] placeholder-[#65676b] focus:outline-none text-[15px]"
                 disabled={sending}
               />
-              <button className="p-2 text-[#0084ff] hover:bg-[#e4e6eb] rounded-full transition-colors flex-shrink-0">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="10" />
-                  <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-                  <line x1="9" y1="9" x2="9.01" y2="9" />
-                  <line x1="15" y1="9" x2="15.01" y2="9" />
-                </svg>
-              </button>
             </div>
             {newMessage.trim() ? (
               <button

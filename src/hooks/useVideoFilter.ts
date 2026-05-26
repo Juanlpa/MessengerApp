@@ -4,7 +4,7 @@ import { useState, useRef, useCallback } from 'react';
 import { type FilterId, applyColorFilter } from '@/lib/filters/canvas-filters';
 
 export type { FilterId };
-export type BackgroundId = 'none';
+export type BackgroundId = 'none' | 'blur';
 
 export function useVideoFilter() {
   const [activeFilter, setActiveFilterState] = useState<FilterId>('none');
@@ -15,14 +15,16 @@ export function useVideoFilter() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hiddenVideoRef = useRef<HTMLVideoElement | null>(null);
   const activeFilterRef = useRef<FilterId>('none');
+  const activeBackgroundRef = useRef<BackgroundId>('none');
 
   const setFilter = useCallback((f: FilterId) => {
     activeFilterRef.current = f;
     setActiveFilterState(f);
   }, []);
 
-  const setBackground = useCallback((_bg: BackgroundId) => {
-    setActiveBackgroundState(_bg);
+  const setBackground = useCallback((bg: BackgroundId) => {
+    activeBackgroundRef.current = bg;
+    setActiveBackgroundState(bg);
   }, []);
 
   const stopPipeline = useCallback(() => {
@@ -89,7 +91,7 @@ export function useVideoFilter() {
       const loop = () => {
         if (!hiddenVideoRef.current || hiddenVideo.paused || hiddenVideo.ended) return;
         // Use canvas.width/height directly so any dimension update in startLoop is reflected
-        applyColorFilter(ctx, hiddenVideo, activeFilterRef.current, canvas.width, canvas.height);
+        applyColorFilter(ctx, hiddenVideo, activeFilterRef.current, canvas.width, canvas.height, activeBackgroundRef.current === 'blur');
         rafIdRef.current = requestAnimationFrame(loop);
       };
       rafIdRef.current = requestAnimationFrame(loop);

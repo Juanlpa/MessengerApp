@@ -404,6 +404,7 @@ export function useWebRTC(
         callerId: currentUserId,
         callerName: currentUsername,
         callId: callIdRef.current,
+        isAudioOnly: audioOnly,
       });
     }
   };
@@ -552,6 +553,8 @@ export function useWebRTC(
     }
   }, [callState]);
 
+  const forceIdle = useCallback(() => setCallStateSafe('idle'), [setCallStateSafe]);
+
   return {
     callState,
     localVideoRef,
@@ -560,6 +563,7 @@ export function useWebRTC(
     acceptCall,
     rejectCall,
     endCall,
+    forceIdle,
     inviteToCall,
     toggleAudio,
     toggleVideo,

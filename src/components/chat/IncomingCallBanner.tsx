@@ -56,7 +56,9 @@ export function IncomingCallBanner() {
       {/* Info */}
       <div className="flex-1 min-w-0">
         <p className="text-[#050505] font-semibold text-[15px] truncate">{incomingCall.callerName}</p>
-        <p className="text-[#65676b] text-[13px]">Llamada entrante...</p>
+        <p className="text-[#65676b] text-[13px]">
+          {incomingCall.isAudioOnly ? '📞 Llamada de voz' : '🎥 Videollamada'}
+        </p>
       </div>
 
       {/* Botones */}

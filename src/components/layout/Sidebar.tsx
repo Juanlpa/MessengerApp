@@ -12,17 +12,24 @@ import { ArchivedSection } from '@/components/layout/ArchivedSection';
 
 export function Sidebar() {
   const [showNewChat, setShowNewChat] = useState(false);
+  const [sidebarSearch, setSidebarSearch] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Array<{ id: string; username: string; dh_public_key: string }>>([]);
   const [creating, setCreating] = useState(false);
 
-  const { user, token } = useAuthStore();
+  const user = useAuthStore(s => s.user);
+  const token = useAuthStore(s => s.token);
   const pathname = usePathname();
   const activeConversationId = pathname?.startsWith('/chat/')
     ? pathname.split('/chat/')[1]
     : null;
 
-  const { conversations, reload, archive, mute } = useConversations(false);
+  const { conversations: allConversations, reload, archive, mute } = useConversations(false);
+  const conversations = sidebarSearch.trim()
+    ? allConversations.filter(c =>
+        c.otherUser.username.toLowerCase().includes(sidebarSearch.toLowerCase())
+      )
+    : allConversations;
   const { isUserOnline } = usePresence(user?.id || '', user?.username || '');
 
   const searchUsers = async () => {
@@ -118,6 +125,8 @@ export function Sidebar() {
             </div>
             <input
               type="text"
+              value={sidebarSearch}
+              onChange={e => setSidebarSearch(e.target.value)}
               placeholder="Buscar en Messenger"
               className="w-full bg-[#f0f2f5] text-[#050505] placeholder-[#65676b] rounded-full py-2 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-[#0084ff]/50 text-[15px]"
             />
@@ -128,9 +137,15 @@ export function Sidebar() {
         <div className="flex-1 overflow-y-auto px-2">
           {conversations.length === 0 ? (
             <div className="p-8 text-center text-[#65676b] text-[15px]">
-              No tienes conversaciones aún.
-              <br />
-              Presiona el botón para iniciar una.
+              {sidebarSearch.trim() ? (
+                <>Sin resultados para &ldquo;{sidebarSearch}&rdquo;</>
+              ) : (
+                <>
+                  No tienes conversaciones aún.
+                  <br />
+                  Presiona el botón para iniciar una.
+                </>
+              )}
             </div>
           ) : (
             conversations.map(conv => (
