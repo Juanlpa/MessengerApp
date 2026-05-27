@@ -203,14 +203,14 @@ export function CallModal({
   })();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div className="relative w-full max-w-4xl max-h-[90vh] aspect-video bg-gray-900 rounded-2xl overflow-hidden shadow-2xl border border-gray-800">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-0 md:p-4">
+      <div className="relative w-full h-full max-h-screen md:max-w-4xl md:max-h-[90vh] md:aspect-video md:rounded-2xl overflow-hidden shadow-2xl md:border md:border-gray-800 bg-gray-900 flex flex-col">
 
         {/* Audio-only or terminal state: centered avatar */}
         {(isAudioOnly || isTerminal) && (
-          <div className="w-full h-full flex items-center justify-center bg-gradient-to-b from-gray-800 to-gray-900">
+          <div className="w-full h-full flex items-center justify-center bg-gradient-to-b from-gray-800 to-gray-900 flex-1">
             <div className="flex flex-col items-center gap-4">
-              <div className={`w-32 h-32 rounded-full flex items-center justify-center text-white text-5xl font-bold shadow-xl ${
+              <div className={`w-24 h-24 sm:w-32 sm:h-32 rounded-full flex items-center justify-center text-white text-4xl sm:text-5xl font-bold shadow-xl ${
                 isTerminal
                   ? 'bg-gradient-to-tr from-gray-600 to-gray-700'
                   : 'bg-gradient-to-tr from-[#0084ff] to-[#00c6ff]'
@@ -237,14 +237,16 @@ export function CallModal({
           ref={remoteVideoRef}
           autoPlay
           playsInline
-          className={`w-full h-full object-cover ${(isAudioOnly || isTerminal) ? 'hidden' : ''}`}
+          className={`w-full h-full object-cover flex-1 ${(isAudioOnly || isTerminal) ? 'hidden' : ''}`}
         />
 
         {/* Local video PiP — se mueve a la esquina inferior izquierda cuando se abre el panel
             de contactos (para no superponerse ni con el header ni con la barra de controles). */}
         {showLocalVideo && (
-          <div className={`absolute aspect-video bg-gray-800 rounded-lg overflow-hidden shadow-lg border border-gray-700 transition-all duration-200 ${
-            showContacts ? 'bottom-6 left-6 w-36' : 'bottom-6 right-6 w-48'
+          <div className={`absolute aspect-video bg-gray-800 rounded-lg overflow-hidden shadow-lg border border-gray-700 transition-all duration-200 z-10 ${
+            showContacts
+              ? 'bottom-6 left-6 w-24 sm:w-36'
+              : 'bottom-6 right-6 w-28 sm:w-48'
           }`}>
             <video
               ref={localVideoRef}
@@ -279,7 +281,7 @@ export function CallModal({
 
         {/* Contact picker panel */}
         {showContacts && (
-          <div className="absolute inset-y-0 right-0 w-72 bg-gray-900/95 backdrop-blur border-l border-gray-700 flex flex-col z-10">
+          <div className="absolute inset-0 w-full md:inset-y-0 md:right-0 md:w-72 bg-gray-900/95 backdrop-blur md:border-l md:border-gray-700 flex flex-col z-20">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
               <span className="text-white font-semibold text-sm">Añadir participante</span>
               <button
@@ -382,14 +384,14 @@ export function CallModal({
         )}
 
         {/* Overlay: header + controls — se reduce al abrir el panel de contactos */}
-        <div className={`absolute inset-y-0 left-0 flex flex-col justify-between p-6 pointer-events-none transition-all duration-200 ${
-          showContacts ? 'right-72' : 'right-0'
+        <div className={`absolute inset-y-0 left-0 flex flex-col justify-between p-4 sm:p-6 pointer-events-none transition-all duration-200 ${
+          showContacts ? 'right-0 md:right-72' : 'right-0'
         }`}>
 
           {/* Header */}
           <div className="text-center pointer-events-none">
-            <h2 className="text-2xl font-bold text-white drop-shadow-md">{otherUsername}</h2>
-            <p className="text-gray-300 drop-shadow-md">{statusLabel}</p>
+            <h2 className="text-xl sm:text-2xl font-bold text-white drop-shadow-md">{otherUsername}</h2>
+            <p className="text-xs sm:text-sm text-gray-300 drop-shadow-md">{statusLabel}</p>
 
             {/* E2E / SRTP security badge */}
             {(callState === 'connected' || callState === 'reconnecting') && (
@@ -407,21 +409,21 @@ export function CallModal({
           </div>
 
           {/* Controls */}
-          <div className="flex items-center justify-center space-x-4 pointer-events-auto">
+          <div className="flex items-center justify-center space-x-3 sm:space-x-4 pointer-events-auto">
 
             {callState === 'receiving' && (
               <>
                 <button
                   onClick={onAccept}
-                  className="p-4 bg-green-500 hover:bg-green-600 text-white rounded-full transition-colors shadow-lg"
+                  className="p-3 sm:p-4 bg-green-500 hover:bg-green-600 text-white rounded-full transition-colors shadow-lg"
                 >
-                  <Phone className="w-8 h-8" />
+                  <Phone className="w-6 h-6 sm:w-8 sm:h-8" />
                 </button>
                 <button
                   onClick={onReject}
-                  className="p-4 bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors shadow-lg"
+                  className="p-3 sm:p-4 bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors shadow-lg"
                 >
-                  <PhoneOff className="w-8 h-8" />
+                  <PhoneOff className="w-6 h-6 sm:w-8 sm:h-8" />
                 </button>
               </>
             )}
@@ -430,28 +432,28 @@ export function CallModal({
               <>
                 <button
                   onClick={onToggleAudio}
-                  className={`p-4 rounded-full transition-colors shadow-lg ${
+                  className={`p-3 sm:p-4 rounded-full transition-colors shadow-lg ${
                     isAudioMuted ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
                   } text-white`}
                 >
-                  {isAudioMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+                  {isAudioMuted ? <MicOff className="w-5 h-5 sm:w-6 sm:h-6" /> : <Mic className="w-5 h-5 sm:w-6 sm:h-6" />}
                 </button>
 
                 <button
                   onClick={onEndCall}
-                  className="p-4 bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors shadow-lg"
+                  className="p-3.5 sm:p-4 bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors shadow-lg"
                 >
-                  <PhoneOff className="w-8 h-8" />
+                  <PhoneOff className="w-6 h-6 sm:w-8 sm:h-8" />
                 </button>
 
                 {!isAudioOnly && (
                   <button
                     onClick={onToggleVideo}
-                    className={`p-4 rounded-full transition-colors shadow-lg ${
+                    className={`p-3 sm:p-4 rounded-full transition-colors shadow-lg ${
                       isVideoMuted ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
                     } text-white`}
                   >
-                    {isVideoMuted ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
+                    {isVideoMuted ? <VideoOff className="w-5 h-5 sm:w-6 sm:h-6" /> : <Video className="w-5 h-5 sm:w-6 sm:h-6" />}
                   </button>
                 )}
 
@@ -459,14 +461,14 @@ export function CallModal({
                 {callState === 'connected' && onAddParticipant && (
                   <button
                     onClick={handleOpenContacts}
-                    className={`p-3 rounded-full transition-colors shadow-lg ${
+                    className={`p-2.5 sm:p-3 rounded-full transition-colors shadow-lg ${
                       showContacts
                         ? 'bg-blue-500 hover:bg-blue-600'
                         : 'bg-gray-700 hover:bg-gray-600'
                     } text-white`}
                     title="Añadir participante a la llamada"
                   >
-                    <UserPlus className="w-5 h-5" />
+                    <UserPlus className="w-4 h-4 sm:w-5 sm:h-5" />
                   </button>
                 )}
 
@@ -474,14 +476,14 @@ export function CallModal({
                 {!isAudioOnly && onFilterChange && (
                   <button
                     onClick={() => setShowFilterPanel(s => !s)}
-                    className={`p-3 rounded-full transition-colors shadow-lg ${
+                    className={`p-2.5 sm:p-3 rounded-full transition-colors shadow-lg ${
                       showFilterPanel || activeFilter !== 'none' || activeBackground !== 'none'
                         ? 'bg-[#0084ff] hover:bg-[#0070d8]'
                         : 'bg-gray-700 hover:bg-gray-600'
                     } text-white`}
                     title="Efectos de video"
                   >
-                    <Sparkles className="w-5 h-5" />
+                    <Sparkles className="w-4 h-4 sm:w-5 sm:h-5" />
                   </button>
                 )}
               </>

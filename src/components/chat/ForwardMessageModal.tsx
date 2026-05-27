@@ -155,32 +155,32 @@ export function ForwardMessageModal({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl w-full max-w-md max-h-[70vh] flex flex-col overflow-hidden"
+        className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-850 rounded-2xl w-full max-w-md max-h-[85vh] sm:max-h-[70vh] flex flex-col overflow-hidden shadow-xl"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="px-5 py-4 border-b border-[#e4e6eb] flex items-center justify-between">
-          <h3 className="text-[17px] font-semibold text-[#050505]">Reenviar mensaje</h3>
-          <button onClick={onClose} className="p-1 rounded-full hover:bg-[#f0f2f5] text-[#65676b]">
+        <div className="px-5 py-4 border-b border-[#e4e6eb] dark:border-gray-800 flex items-center justify-between">
+          <h3 className="text-[17px] font-semibold text-[#050505] dark:text-white">Reenviar mensaje</h3>
+          <button onClick={onClose} className="p-1 rounded-full hover:bg-[#f0f2f5] dark:hover:bg-gray-800 text-[#65676b] dark:text-gray-400 transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Preview del mensaje */}
-        <div className="px-5 py-3 bg-[#f0f2f5] border-b border-[#e4e6eb]">
-          <p className="text-[12px] text-[#65676b] mb-1">Mensaje a reenviar:</p>
-          <p className="text-[14px] text-[#050505] line-clamp-2">{cleanAttachmentText(messageText)}</p>
+        <div className="px-5 py-3 bg-[#f0f2f5] dark:bg-gray-800/50 border-b border-[#e4e6eb] dark:border-gray-800">
+          <p className="text-[12px] text-[#65676b] dark:text-gray-400 mb-1">Mensaje a reenviar:</p>
+          <p className="text-[14px] text-[#050505] dark:text-gray-200 line-clamp-2">{cleanAttachmentText(messageText)}</p>
         </div>
 
         {/* Buscador */}
-        <div className="px-4 py-2 border-b border-[#e4e6eb] flex items-center gap-2">
-          <Search className="w-4 h-4 text-[#65676b]" />
+        <div className="px-4 py-2 border-b border-[#e4e6eb] dark:border-gray-800 flex items-center gap-2">
+          <Search className="w-4 h-4 text-[#65676b] dark:text-gray-400" />
           <input
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Buscar contacto..."
-            className="flex-1 bg-transparent text-[#050505] placeholder-[#65676b] focus:outline-none text-[14px]"
+            className="flex-1 bg-transparent text-[#050505] dark:text-white placeholder-[#65676b] dark:placeholder-gray-500 focus:outline-none text-[14px]"
           />
         </div>
 
@@ -193,7 +193,7 @@ export function ForwardMessageModal({
           )}
 
           {!loading && filtered.length === 0 && (
-            <p className="text-center text-[#65676b] py-8 text-[14px]">
+            <p className="text-center text-[#65676b] dark:text-gray-400 py-8 text-[14px]">
               {search ? 'No se encontraron contactos' : 'No hay otras conversaciones'}
             </p>
           )}
@@ -203,12 +203,12 @@ export function ForwardMessageModal({
               key={conv.id}
               onClick={() => handleForward(conv)}
               disabled={sendingTo !== null}
-              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#f0f2f5] transition-colors text-left disabled:opacity-50"
+              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#f0f2f5] dark:hover:bg-gray-800/40 transition-colors text-left disabled:opacity-50"
             >
               <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white font-medium flex-shrink-0">
                 {conv.otherUser.username[0]?.toUpperCase() || '?'}
               </div>
-              <p className="flex-1 text-[15px] text-[#050505] font-medium">{conv.otherUser.username}</p>
+              <p className="flex-1 text-[15px] text-[#050505] dark:text-white font-medium">{conv.otherUser.username}</p>
               {sendingTo === conv.id ? (
                 <div className="w-5 h-5 border-2 border-[#0084ff] border-t-transparent rounded-full animate-spin" />
               ) : (

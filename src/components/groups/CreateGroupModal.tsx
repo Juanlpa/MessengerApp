@@ -48,20 +48,20 @@ export function CreateGroupModal({ open, onClose, onCreated }: CreateGroupModalP
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-md bg-[#2c2c2e] rounded-2xl shadow-xl overflow-hidden max-h-[85vh] flex flex-col">
+      <div className="w-full max-w-md bg-white dark:bg-[#1c1e21] border border-gray-150 dark:border-gray-800 rounded-2xl shadow-xl overflow-hidden max-h-[85vh] flex flex-col transition-colors">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 shrink-0">
-          <h2 className="text-base font-semibold text-white">Nuevo grupo</h2>
-          <button onClick={onClose} className="text-white/50 hover:text-white text-lg leading-none">✕</button>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-white/10 shrink-0">
+          <h2 className="text-base font-semibold text-gray-950 dark:text-white">Nuevo grupo</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 dark:text-white/50 dark:hover:text-white text-lg leading-none transition-colors">✕</button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
           {/* Nombre del grupo */}
           <div>
-            <label className="text-xs text-white/40 uppercase tracking-wider block mb-1.5">
+            <label className="text-xs text-gray-500 dark:text-white/40 uppercase tracking-wider block mb-1.5">
               Nombre del grupo *
             </label>
             <input
@@ -70,13 +70,13 @@ export function CreateGroupModal({ open, onClose, onCreated }: CreateGroupModalP
               onChange={(e) => setName(e.target.value)}
               maxLength={50}
               placeholder="Ej: Equipo de proyecto"
-              className="w-full bg-white/10 text-white placeholder-white/40 rounded-lg px-4 py-2.5 text-sm outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-transparent text-gray-950 dark:text-white placeholder-gray-400 dark:placeholder-white/40 rounded-lg px-4 py-2.5 text-sm outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white dark:focus:bg-transparent"
             />
           </div>
 
           {/* Descripción */}
           <div>
-            <label className="text-xs text-white/40 uppercase tracking-wider block mb-1.5">
+            <label className="text-xs text-gray-500 dark:text-white/40 uppercase tracking-wider block mb-1.5">
               Descripción (opcional)
             </label>
             <input
@@ -85,25 +85,25 @@ export function CreateGroupModal({ open, onClose, onCreated }: CreateGroupModalP
               onChange={(e) => setDescription(e.target.value)}
               maxLength={200}
               placeholder="¿De qué trata este grupo?"
-              className="w-full bg-white/10 text-white placeholder-white/40 rounded-lg px-4 py-2.5 text-sm outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-transparent text-gray-950 dark:text-white placeholder-gray-400 dark:placeholder-white/40 rounded-lg px-4 py-2.5 text-sm outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white dark:focus:bg-transparent"
             />
           </div>
 
           {/* Selección de miembros */}
           <div>
-            <p className="text-xs text-white/40 uppercase tracking-wider mb-2">
+            <p className="text-xs text-gray-500 dark:text-white/40 uppercase tracking-wider mb-2">
               Miembros — selecciona al menos 2
               {selectedIds.size > 0 && (
-                <span className="ml-1 text-blue-400">({selectedIds.size} seleccionados)</span>
+                <span className="ml-1 text-blue-500 dark:text-blue-400">({selectedIds.size} seleccionados)</span>
               )}
             </p>
 
             {contactsLoading && (
-              <p className="text-white/40 text-sm py-3 text-center">Cargando contactos...</p>
+              <p className="text-gray-400 dark:text-white/40 text-sm py-3 text-center">Cargando contactos...</p>
             )}
 
             {!contactsLoading && contacts.length === 0 && (
-              <p className="text-white/40 text-sm py-3 text-center">
+              <p className="text-gray-400 dark:text-white/40 text-sm py-3 text-center">
                 Necesitas contactos para crear un grupo
               </p>
             )}
@@ -117,25 +117,27 @@ export function CreateGroupModal({ open, onClose, onCreated }: CreateGroupModalP
                     key={c.friend.id}
                     onClick={() => toggleMember(c.friend!.id)}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-left ${
-                      selected ? 'bg-blue-600/20 border border-blue-500/30' : 'hover:bg-white/5'
+                      selected
+                        ? 'bg-blue-600/10 dark:bg-blue-600/20 border border-blue-500/20 dark:border-blue-500/30'
+                        : 'hover:bg-gray-100 dark:hover:bg-white/5'
                     }`}
                   >
                     <div className="size-8 rounded-full bg-purple-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
                       {c.friend.username[0]?.toUpperCase()}
                     </div>
-                    <span className="flex-1 text-sm text-white">{c.friend.username}</span>
-                    {selected && <span className="text-blue-400 text-sm">✓</span>}
+                    <span className="flex-1 text-sm text-gray-900 dark:text-white">{c.friend.username}</span>
+                    {selected && <span className="text-blue-500 dark:text-blue-400 text-sm">✓</span>}
                   </button>
                 );
               })}
             </div>
           </div>
 
-          {error && <p className="text-red-400 text-sm">{error}</p>}
+          {error && <p className="text-red-500 dark:text-red-400 text-sm">{error}</p>}
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-4 border-t border-white/10 shrink-0">
+        <div className="px-5 py-4 border-t border-gray-200 dark:border-white/10 shrink-0">
           <button
             onClick={handleCreate}
             disabled={!canCreate || loading}

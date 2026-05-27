@@ -123,12 +123,12 @@ export function GroupCallModal({
   const participantList = Array.from(participants.values());
   const total = participantList.length + 1; // +1 por el usuario local
 
-  // Determinar layout del grid
+  // Determinar layout del grid responsivo
   const gridClass =
     total === 1 ? 'grid-cols-1' :
-    total === 2 ? 'grid-cols-2' :
-    total <= 4 ? 'grid-cols-2' :
-    'grid-cols-3';
+    total === 2 ? 'grid-cols-1 md:grid-cols-2' :
+    total <= 4 ? 'grid-cols-1 sm:grid-cols-2' :
+    'grid-cols-2 sm:grid-cols-3';
 
   return (
     <div className="fixed inset-0 z-50 bg-[#0d0d1a] flex flex-col">
@@ -199,24 +199,24 @@ export function GroupCallModal({
       )}
 
       {/* Barra de controles */}
-      <div className="px-6 py-5 bg-black/40 flex items-center justify-center gap-5">
+      <div className="px-4 sm:px-6 py-4 sm:py-5 bg-black/40 flex items-center justify-center gap-3 sm:gap-5">
         {/* Toggle micrófono */}
         <button
           onClick={onToggleAudio}
-          className={`w-14 h-14 rounded-full flex items-center justify-center transition-colors ${
+          className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center transition-colors ${
             isAudioMuted ? 'bg-red-500 hover:bg-red-600' : 'bg-white/20 hover:bg-white/30'
           }`}
           title={isAudioMuted ? 'Activar micrófono' : 'Silenciar'}
         >
           {isAudioMuted ? (
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+            <svg width="20" height="20" className="sm:w-[22px] sm:h-[22px]" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
               <line x1="2" y1="2" x2="22" y2="22" />
               <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" />
               <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23" />
               <line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" />
             </svg>
           ) : (
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+            <svg width="20" height="20" className="sm:w-[22px] sm:h-[22px]" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
               <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
               <line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" />
@@ -227,18 +227,18 @@ export function GroupCallModal({
         {/* Toggle cámara */}
         <button
           onClick={onToggleVideo}
-          className={`w-14 h-14 rounded-full flex items-center justify-center transition-colors ${
+          className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center transition-colors ${
             isVideoMuted ? 'bg-red-500 hover:bg-red-600' : 'bg-white/20 hover:bg-white/30'
           }`}
           title={isVideoMuted ? 'Activar cámara' : 'Apagar cámara'}
         >
           {isVideoMuted ? (
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+            <svg width="20" height="20" className="sm:w-[22px] sm:h-[22px]" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
               <line x1="2" y1="2" x2="22" y2="22" />
               <path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10" />
             </svg>
           ) : (
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
+            <svg width="20" height="20" className="sm:w-[22px] sm:h-[22px]" viewBox="0 0 24 24" fill="white">
               <path d="M23 7l-7 5 7 5V7z" /><rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
             </svg>
           )}
@@ -248,14 +248,14 @@ export function GroupCallModal({
         {onFilterChange && (
           <button
             onClick={() => setShowFilterPanel(s => !s)}
-            className={`w-14 h-14 rounded-full flex items-center justify-center transition-colors ${
+            className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center transition-colors ${
               showFilterPanel || activeFilter !== 'none' || activeBackground !== 'none'
                 ? 'bg-[#0084ff] hover:bg-[#0070d8]'
                 : 'bg-white/20 hover:bg-white/30'
             }`}
             title="Efectos de video"
           >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5">
+            <svg width="20" height="20" className="sm:w-[22px] sm:h-[22px]" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5">
               <path d="M12 2L9.09 8.26L2 9.27L7 14.14L5.82 21.02L12 17.77L18.18 21.02L17 14.14L22 9.27L14.91 8.26L12 2Z"/>
             </svg>
           </button>
@@ -264,10 +264,10 @@ export function GroupCallModal({
         {/* Colgar */}
         <button
           onClick={onLeave}
-          className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center transition-colors"
+          className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center transition-colors shadow-lg"
           title="Salir de la llamada"
         >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
+          <svg width="22" height="22" className="sm:w-6 sm:h-6" viewBox="0 0 24 24" fill="white">
             <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
           </svg>
         </button>
