@@ -1,58 +1,42 @@
 import crypto from 'crypto';
 
 import {
-  NextRequest,
-  NextResponse
-} from 'next/server';
+NextRequest,
+NextResponse
+}
+from 'next/server';
 
 import {
-  getSupabaseAdmin
-} from '@/lib/supabase/admin';
+getSupabaseAdmin
+}
+from '@/lib/supabase/admin';
 
 import {
-  checkRateLimit,
-  saveAttempt
-} from '../../../../lib/auth/rateLimit';
-
-import {
-  logSecurityEvent
-} from '../../../../lib/auth/securityLogs';
-
+sendResetEmail
+}
+from '@/lib/email/sendResetEmail';
 
 export async function POST(
-  request: NextRequest
+request:NextRequest
 ){
 
 try{
 
-const ip=
-request.headers.get(
-'x-forwarded-for'
-)||'unknown';
+const {email}=
+await request.json();
 
-
-const allowed=
-await checkRateLimit(ip);
-
-if(!allowed){
+if(!email){
 
 return NextResponse.json(
 {
-error:
-'Too many attempts'
+error:'Email requerido'
 },
 {
-status:429
+status:400
 }
-)
+);
 
 }
-
-const body=
-await request.json();
-
-const {email}=body;
-
 
 const supabase=
 getSupabaseAdmin();
@@ -62,55 +46,38 @@ await supabase
 
 .from('users')
 
-.select('id')
+.select(
+'id,email'
+)
 
 .eq(
 'email',
-email
+email.toLowerCase()
 )
 
 .single();
 
-
 if(!user){
 
-await saveAttempt(
-email,
-ip,
-false
-);
+return NextResponse.json({
 
-return NextResponse.json(
-{
-error:
-'User not found'
-},
-{
-status:404
-}
-)
+message:
+'Si existe, se envió correo'
+
+});
 
 }
-
 
 const token=
 crypto
 .randomBytes(32)
 .toString('hex');
 
-
 const tokenHash=
 crypto
 .createHash('sha256')
 .update(token)
 .digest('hex');
-
-
-const expiresAt=
-new Date(
-Date.now()+1800000
-);
-
 
 await supabase
 
@@ -120,36 +87,35 @@ await supabase
 
 .insert({
 
-user_id:user.id,
+user_id:
+user.id,
 
 token_hash:
 tokenHash,
 
 expires_at:
-expiresAt
+new Date(
+Date.now()+
+30*60*1000
+),
+
+used:false
 
 });
 
+const resetLink=
 
-await logSecurityEvent(
+`http://localhost:3000/auth/reset-password?token=${token}`;
 
-'PASSWORD_RESET_REQUEST',
-
-user.id,
-
-{
-ip
-}
-
+await sendResetEmail(
+email,
+resetLink
 );
-
 
 return NextResponse.json({
 
 message:
-'Token generated',
-
-token
+'Correo enviado'
 
 });
 
@@ -166,7 +132,7 @@ error:
 {
 status:500
 }
-)
+);
 
 }
 

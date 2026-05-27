@@ -1,332 +1,208 @@
 /**
  * POST /api/auth/login
- *
- * Recibe:
- * { email, passwordHash }
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
+import { signJWT, createJWTPayload } from '@/lib/auth/jwt';
+import { constantTimeEqual, fromHex } from '@/lib/crypto/utils';
 
-import {
-signJWT,
-createJWTPayload
-} from '@/lib/auth/jwt';
-
-import {
-constantTimeEqual,
-fromHex
-} from '@/lib/crypto/utils';
-
-import {
-checkRateLimit,
-saveAttempt
-} from '@/lib/auth/rateLimit';
-
-import {
-logSecurityEvent
-} from '../../../../lib/auth/securityLogs';
-
-import {
-createSession
-} from '../../../../lib/auth/sessionManager';
-
-
-interface UserRow{
-
-id:string;
-
-email:string;
-
-username:string;
-
-password_hash:string;
-
-dh_public_key:string;
-
+interface UserRow {
+  id: string;
+  email: string;
+  username: string;
+  password_hash: string;
+  salt: string;
+  dh_public_key: string;
 }
 
+export async function POST(request: NextRequest) {
+
+  try {
+
+    const body = await request.json();
+
+    const {
+      email,
+      passwordHash
+    } = body;
+
+    if (
+      !email ||
+      !passwordHash
+    ) {
+
+      return NextResponse.json(
+        {
+          error:'Email and passwordHash required'
+        },
+        {
+          status:400
+        }
+      );
+
+    }
+
+    const supabase =
+      getSupabaseAdmin();
+
+    const {
+      data
+    } =
+    await supabase
+
+    .from(
+      'users'
+    )
+
+    .select(
+      `
+      id,
+      email,
+      username,
+      password_hash,
+      salt,
+      dh_public_key
+      `
+    )
 
-export async function POST(
-request:NextRequest
-){
+    .eq(
+      'email',
+      email.toLowerCase()
+    )
 
-try{
+    .single();
 
-const ip=
-request.headers.get(
-'x-forwarded-for'
-)||'unknown';
+    const user =
+      data as UserRow | null;
 
+    if(!user){
 
-const userAgent=
-request.headers.get(
-'user-agent'
-)||'unknown';
+      console.log(
+        'USUARIO NO ENCONTRADO'
+      );
 
+      return NextResponse.json(
+        {
+          error:'Invalid credentials'
+        },
+        {
+          status:401
+        }
+      );
 
+    }
 
-const allowed=
-await checkRateLimit(
-ip
-);
+    // logs
+    console.log(
+      'EMAIL:',
+      email
+    );
 
+    console.log(
+      'SALT DB:',
+      user.salt
+    );
 
-if(!allowed){
+    console.log(
+      'HASH FRONT:',
+      passwordHash
+    );
 
-await logSecurityEvent(
+    console.log(
+      'HASH DB:',
+      user.password_hash
+    );
 
-'RATE_LIMIT_BLOCK',
 
-null,
+    const storedHash =
+      fromHex(
+        user.password_hash
+      );
 
-{
-ip,
-userAgent
-}
+    const providedHash =
+      fromHex(
+        passwordHash
+      );
 
-);
 
-return NextResponse.json(
-{
-error:
-'Too many attempts'
-},
-{
-status:429
-}
-);
+    const valid =
+      constantTimeEqual(
+        storedHash,
+        providedHash
+      );
 
-}
+    console.log(
+      'MATCH:',
+      valid
+    );
 
 
+    if(!valid){
 
-const body=
-await request.json();
+      return NextResponse.json(
+        {
+          error:'Invalid credentials'
+        },
+        {
+          status:401
+        }
+      );
 
-const {
+    }
 
-email,
 
-passwordHash
+    const payload =
+    createJWTPayload({
 
-}=body;
+      id:user.id,
 
+      email:user.email,
 
-if(
-!email||
-!passwordHash
-){
+      username:user.username
 
-return NextResponse.json(
-{
-error:
-'Email and passwordHash required'
-},
-{
-status:400
-}
-);
+    });
 
-}
 
+    const token =
+      signJWT(
+        payload
+      );
 
-const supabase=
-getSupabaseAdmin();
 
+    return NextResponse.json({
 
-const {data}=
-await supabase
+      token,
 
-.from('users')
+      user:{
 
-.select(
-'id,email,username,password_hash,dh_public_key'
-)
+        id:user.id,
 
-.eq(
-'email',
-email.toLowerCase()
-)
+        email:user.email,
 
-.single();
+        username:user.username
 
+      }
 
-const user=
-data as UserRow|null;
+    });
 
+  }
+  catch(err){
 
-if(!user){
+    console.error(
+      'LOGIN ERROR:',
+      err
+    );
 
-await saveAttempt(
-email,
-ip,
-false
-);
+    return NextResponse.json(
+      {
+        error:'Internal server error'
+      },
+      {
+        status:500
+      }
+    );
 
-await logSecurityEvent(
-
-'LOGIN_FAILED',
-
-null,
-
-{
-ip,
-email
-}
-
-);
-
-return NextResponse.json(
-{
-error:
-'Invalid credentials'
-},
-{
-status:401
-}
-);
-
-}
-
-
-const storedHash=
-fromHex(
-user.password_hash
-);
-
-const providedHash=
-fromHex(
-passwordHash
-);
-
-
-if(
-!constantTimeEqual(
-storedHash,
-providedHash
-)
-){
-
-await saveAttempt(
-email,
-ip,
-false
-);
-
-await logSecurityEvent(
-
-'LOGIN_FAILED',
-
-user.id,
-
-{
-ip
-}
-
-);
-
-return NextResponse.json(
-{
-error:
-'Invalid credentials'
-},
-{
-status:401
-}
-);
-
-}
-
-
-const payload=
-createJWTPayload({
-
-id:user.id,
-
-email:user.email,
-
-username:user.username
-
-});
-
-
-const token=
-signJWT(
-payload
-);
-
-
-await saveAttempt(
-email,
-ip,
-true
-);
-
-
-await createSession(
-
-user.id,
-
-token,
-
-userAgent,
-
-ip
-
-);
-
-
-await logSecurityEvent(
-
-'LOGIN_SUCCESS',
-
-user.id,
-
-{
-ip,
-userAgent
-}
-
-);
-
-
-return NextResponse.json({
-
-token,
-
-user:{
-
-id:user.id,
-
-email:user.email,
-
-username:user.username
-
-}
-
-});
-
-
-}
-catch(err){
-
-console.error(
-'Login error:',
-err
-);
-
-return NextResponse.json(
-{
-error:
-'Internal server error'
-},
-{
-status:500
-}
-);
-
-}
+  }
 
 }
