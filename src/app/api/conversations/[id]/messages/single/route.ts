@@ -38,10 +38,10 @@ export async function GET(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: 'Not a participant' }, { status: 403 });
   }
 
-  // Obtener el mensaje
+  // Obtener el mensaje con metadata de adjunto
   const { data: msg, error } = await supabase
     .from('messages')
-    .select('id, sender_id, server_ciphertext, server_iv, server_mac_tag, created_at')
+    .select('id, sender_id, server_ciphertext, server_iv, server_mac_tag, created_at, message_type, attachment_id, attachment:attachments!attachment_id(id, original_filename, mime_type, size_bytes, attachment_type, duration_ms, waveform_data)')
     .eq('id', messageId)
     .eq('conversation_id', conversationId)
     .single();
@@ -53,20 +53,14 @@ export async function GET(request: NextRequest, context: RouteContext) {
   // Quitar Capa 2 (at-rest)
   try {
     const masterKey = getServerMasterKey();
-    const typedMsg = msg as {
-      id: string;
-      sender_id: string;
-      server_ciphertext: string;
-      server_iv: string;
-      server_mac_tag: string;
-      created_at: string;
-    };
+    const typedMsg = msg as any;
     const e2eCiphertext = decryptMessageAtRest(
       { ciphertext: typedMsg.server_ciphertext, iv: typedMsg.server_iv, mac: typedMsg.server_mac_tag },
       masterKey
     );
     const e2eData = JSON.parse(e2eCiphertext);
 
+    const att = typedMsg.attachment;
     return NextResponse.json({
       message: {
         id: typedMsg.id,
@@ -77,6 +71,16 @@ export async function GET(request: NextRequest, context: RouteContext) {
           mac: e2eData.mac,
         },
         createdAt: typedMsg.created_at,
+        messageType: typedMsg.message_type || 'text',
+        attachment: att ? {
+          id: att.id,
+          filename: att.original_filename,
+          mimeType: att.mime_type,
+          sizeBytes: att.size_bytes,
+          attachmentType: att.attachment_type,
+          durationMs: att.duration_ms ?? null,
+          waveformData: att.waveform_data ? JSON.parse(att.waveform_data) : [],
+        } : null,
       },
     });
   } catch (err) {
