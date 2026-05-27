@@ -28,7 +28,7 @@ function authHeader(token: string) {
 
 /** Obtener detalles de un grupo (miembros + roles) */
 export function useGroupDetail(groupId: string | null) {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [group, setGroup] = useState<GroupDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +56,7 @@ export function useGroupDetail(groupId: string | null) {
 
 /** Crear un grupo nuevo */
 export function useCreateGroup() {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -93,7 +93,7 @@ export function useCreateGroup() {
 
 /** Actualizar nombre/descripción/avatar del grupo */
 export function useUpdateGroup() {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -129,7 +129,7 @@ export function useUpdateGroup() {
 
 /** Agregar miembro al grupo */
 export function useAddMember() {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -162,7 +162,7 @@ export function useAddMember() {
 
 /** Quitar miembro del grupo (o salirse uno mismo) */
 export function useRemoveMember() {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -194,7 +194,7 @@ export function useRemoveMember() {
 
 /** Cambiar rol de un miembro */
 export function useChangeRole() {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

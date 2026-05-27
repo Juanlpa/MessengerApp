@@ -76,14 +76,20 @@ export async function GET(request: NextRequest) {
   for (const u of (usersData ?? []) as Array<{ id: string; username: string }>) usersById.set(u.id, u);
 
   // Query 4: último mensaje por conversación (solo created_at, sin contenido cifrado)
-  const { data: messages } = await supabase
-    .from('messages')
-    .select('conversation_id, created_at')
-    .in('conversation_id', conversationIds)
-    .order('created_at', { ascending: false });
+  const messagesPromises = conversationIds.map(async (id) => {
+    const { data } = await supabase
+      .from('messages')
+      .select('conversation_id, created_at')
+      .eq('conversation_id', id)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    return data?.[0] || null;
+  });
+  const messagesResults = await Promise.all(messagesPromises);
+  const messages = messagesResults.filter(Boolean) as Array<{ conversation_id: string; created_at: string }>;
 
   const lastMessageByConv = new Map<string, string>();
-  for (const msg of messages ?? []) {
+  for (const msg of messages) {
     if (!lastMessageByConv.has(msg.conversation_id)) {
       lastMessageByConv.set(msg.conversation_id, msg.created_at);
     }

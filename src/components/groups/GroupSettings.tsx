@@ -14,7 +14,7 @@ interface GroupSettingsProps {
 }
 
 export function GroupSettings({ group, onClose, onUpdated }: GroupSettingsProps) {
-  const { user } = useAuthStore();
+  const user = useAuthStore(s => s.user);
   const { updateGroup, loading, error } = useUpdateGroup();
   const [name, setName] = useState(group.name);
   const [description, setDescription] = useState(group.description ?? '');

@@ -24,7 +24,7 @@ export function AddMembersModal({
   onClose,
   onAdded,
 }: AddMembersModalProps) {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const { addMember, loading, error } = useAddMember();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchUser[]>([]);

@@ -86,6 +86,10 @@ export default function ConversationPage() {
   const [isGroup, setIsGroup] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [sharedKey, setSharedKey] = useState<Uint8Array | null>(null);
+  const sharedKeyRef = useRef<Uint8Array | null>(null);
+  useEffect(() => {
+    sharedKeyRef.current = sharedKey;
+  }, [sharedKey]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -339,47 +343,8 @@ export default function ConversationPage() {
     .map(m => m.id);
   useMarkAsRead(conversationId, user?.id || '', token || '', otherMessageIds);
 
-  // Cargar shared key y mensajes iniciales
-  const initConversation = useCallback(async () => {
-    if (!token || !user) return;
-    setLoading(true);
-    try {
-      // Usar endpoint individual en vez de descargar la lista completa
-      const convRes = await fetch(`/api/conversations/${conversationId}?t=${Date.now()}`, {
-        cache: 'no-store',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!convRes.ok) throw new Error('Failed to load conversation');
-      const convData = await convRes.json();
-      const conv = convData.conversation;
-      if (!conv) throw new Error('Conversation not found');
-
-      setIsGroup(conv.isGroup || false);
-      setGroupName(conv.groupName || '');
-      setOtherUsername(conv.otherUser?.username || '');
-      setOtherUserId(conv.otherUser?.id || '');
-
-      // Descifrar shared key — usar storageKey del store si ya está listo,
-      // o calcularlo en el momento si aún no llegó (race entre setAuth y setKeys)
-      const { decryptSharedKeyFromStorage } = await import('@/lib/crypto/key-exchange');
-      const { pbkdf2 } = await import('@/lib/crypto/pbkdf2');
-
-      const storageKey = cachedStorageKey ?? pbkdf2(user.id, 'storage-salt', 1000, 32);
-      const decryptedSharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKey);
-      setSharedKey(decryptedSharedKey);
-
-      // Cargar mensajes iniciales
-      await loadMessages(decryptedSharedKey);
-    } catch (err) {
-      console.error('Init conversation error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load');
-    } finally {
-      setLoading(false);
-    }
-  }, [token, user, conversationId]);
-
   const loadMessages = useCallback(async (key?: Uint8Array, cursor?: string) => {
-    const currentKey = key || sharedKey;
+    const currentKey = key || sharedKeyRef.current;
     if (!token || !currentKey) return;
 
     const params = new URLSearchParams({ t: Date.now().toString(), limit: String(MESSAGES_PER_PAGE) });
@@ -439,7 +404,46 @@ export default function ConversationPage() {
     } else {
       setMessages(decrypted);
     }
-  }, [conversationId, token, sharedKey]);
+  }, [conversationId, token]);
+
+  // Cargar shared key y mensajes iniciales
+  const initConversation = useCallback(async () => {
+    if (!token || !user) return;
+    setLoading(true);
+    try {
+      // Usar endpoint individual en vez de descargar la lista completa
+      const convRes = await fetch(`/api/conversations/${conversationId}?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!convRes.ok) throw new Error('Failed to load conversation');
+      const convData = await convRes.json();
+      const conv = convData.conversation;
+      if (!conv) throw new Error('Conversation not found');
+
+      setIsGroup(conv.isGroup || false);
+      setGroupName(conv.groupName || '');
+      setOtherUsername(conv.otherUser?.username || '');
+      setOtherUserId(conv.otherUser?.id || '');
+
+      // Descifrar shared key — usar storageKey del store si ya está listo,
+      // o calcularlo en el momento si aún no llegó (race entre setAuth y setKeys)
+      const { decryptSharedKeyFromStorage } = await import('@/lib/crypto/key-exchange');
+      const { pbkdf2 } = await import('@/lib/crypto/pbkdf2');
+
+      const storageKey = cachedStorageKey ?? pbkdf2(user.id, 'storage-salt', 1000, 32);
+      const decryptedSharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKey);
+      setSharedKey(decryptedSharedKey);
+
+      // Cargar mensajes iniciales
+      await loadMessages(decryptedSharedKey);
+    } catch (err) {
+      console.error('Init conversation error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load');
+    } finally {
+      setLoading(false);
+    }
+  }, [token, user, conversationId, cachedStorageKey, loadMessages]);
 
   useEffect(() => {
     initConversation();
@@ -596,8 +600,8 @@ export default function ConversationPage() {
     const result = await uploadAttachment(file);
     if (!result) return null;
 
-    const type = file.type.startsWith('image/') ? 'image' : 'file';
-    const content = `[${type}:${result.id}] ${file.name}`;
+    const type = result.attachmentType;
+    const content = `[${type}:${result.id}] ${result.filename}`;
     
     try {
       const { encryptMessageE2E } = await import('@/lib/crypto/message-crypto');
@@ -607,15 +611,15 @@ export default function ConversationPage() {
       setMessages(prev => [...prev, {
         id: optimisticId,
         senderId: user?.id || '',
-        text: file.name,
+        text: result.filename,
         createdAt: new Date().toISOString(),
         status: 'sent' as const,
         messageType: type,
         attachment: {
           id: result.id,
-          filename: file.name,
-          mimeType: file.type,
-          sizeBytes: file.size,
+          filename: result.filename,
+          mimeType: result.mimeType,
+          sizeBytes: result.sizeBytes,
           attachmentType: type,
         },
       }]);
@@ -640,9 +644,9 @@ export default function ConversationPage() {
           messageType: type,
           attachment: {
             id: result.id,
-            filename: file.name,
-            mimeType: file.type,
-            sizeBytes: file.size,
+            filename: result.filename,
+            mimeType: result.mimeType,
+            sizeBytes: result.sizeBytes,
             attachmentType: type,
           },
         });
@@ -821,6 +825,16 @@ export default function ConversationPage() {
       <div className="flex-1 flex flex-col min-h-0 min-w-0 bg-white dark:bg-gray-900">
         {/* Header de conversación */}
         <div className="px-4 py-3 bg-white dark:bg-gray-900 border-b border-[#e4e6eb] dark:border-gray-800 flex items-center gap-3">
+          <Link
+            href="/chat"
+            className="md:hidden p-1 mr-1 rounded-full hover:bg-[#f0f2f5] dark:hover:bg-gray-800 text-[#0084ff] transition-colors flex-shrink-0"
+            title="Volver a la lista de chats"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+              <line x1="19" y1="12" x2="5" y2="12" />
+              <polyline points="12 19 5 12 12 5" />
+            </svg>
+          </Link>
           <div className="relative">
             <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white font-medium flex-shrink-0">
               {isGroup ? (groupName[0]?.toUpperCase() || 'G') : (otherUsername[0]?.toUpperCase() || '?')}

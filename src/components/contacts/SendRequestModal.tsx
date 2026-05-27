@@ -17,7 +17,7 @@ interface SendRequestModalProps {
 }
 
 export function SendRequestModal({ open, onClose, onSent }: SendRequestModalProps) {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchUser[]>([]);
   const [searching, setSearching] = useState(false);

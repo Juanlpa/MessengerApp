@@ -52,7 +52,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 }
 
 export function usePushNotifications() {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
 
   const requestAndSubscribe = useCallback(async () => {
     if (!isWebPushSupported() || !token) return;

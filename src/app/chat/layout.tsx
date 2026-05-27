@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { useGlobalCallListener } from '@/hooks/useGlobalCallListener';
@@ -16,6 +16,7 @@ function GlobalCallListenerWrapper({ userId, children }: { userId: string; child
 
 export default function ChatLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const user = useAuthStore(s => s.user);
   const isLoading = useAuthStore(s => s.isLoading);
 
@@ -56,12 +57,16 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
 
   if (!user) return null;
 
+  const isLanding = pathname === '/chat';
+
   return (
     <GlobalCallListenerWrapper userId={user.id}>
       <div className="h-screen overflow-hidden bg-white dark:bg-gray-900 flex text-[#050505] dark:text-white">
         <IncomingCallBanner />
-        <Sidebar />
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div className={`${isLanding ? 'block w-full md:w-[360px]' : 'hidden md:block w-[360px]'} h-full flex-shrink-0`}>
+          <Sidebar />
+        </div>
+        <div className={`flex-1 flex flex-col min-w-0 overflow-hidden ${isLanding ? 'hidden md:flex' : 'flex'}`}>
           {children}
         </div>
       </div>

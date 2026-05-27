@@ -1,4 +1,4 @@
-'use client';
+import { cleanAttachmentText } from '@/lib/crypto/message-crypto';
 
 interface QuotedMessageProps {
   text: string;
@@ -11,7 +11,8 @@ interface QuotedMessageProps {
  * encima de la burbuja principal.
  */
 export function QuotedMessage({ text, senderName, isMe }: QuotedMessageProps) {
-  const truncated = text.length > 80 ? `${text.slice(0, 80)}…` : text;
+  const cleaned = cleanAttachmentText(text);
+  const truncated = cleaned.length > 80 ? `${cleaned.slice(0, 80)}…` : cleaned;
 
   return (
     <div

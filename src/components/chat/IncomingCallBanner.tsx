@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase/client';
 export function IncomingCallBanner() {
   const router = useRouter();
   const { incomingCall, clearIncomingCall } = useCallStore();
-  const { user } = useAuthStore();
+  const user = useAuthStore(s => s.user);
 
   useEffect(() => {
     if (incomingCall) {

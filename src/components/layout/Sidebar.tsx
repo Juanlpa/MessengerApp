@@ -100,7 +100,7 @@ export function Sidebar() {
 
   return (
     <>
-      <div className="w-[360px] bg-white dark:bg-gray-900 border-r border-[#e4e6eb] dark:border-gray-800 flex flex-col flex-shrink-0">
+      <div className="w-full h-full bg-white dark:bg-gray-900 border-r border-[#e4e6eb] dark:border-gray-800 flex flex-col">
         {/* Header */}
         <div className="p-4 pt-5 pb-2">
           <div className="flex items-center justify-between mb-4">
@@ -310,7 +310,7 @@ export function Sidebar() {
 
       {showContacts && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 font-sans" onClick={() => setShowContacts(false)}>
-          <div className="bg-[#1c1e21] rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div className="bg-white dark:bg-[#1c1e21] rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
             <ContactsList onStartChat={async (userId) => {
               setShowContacts(false);
               const contact = contacts.find(c => c.friend?.id === userId);

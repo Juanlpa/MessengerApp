@@ -82,13 +82,17 @@ export function AttachmentPreview({
   };
 
   const getFileIcon = () => {
-    if (mimeType === 'application/pdf') {
+    if (!mimeType || typeof mimeType !== 'string') {
       return <FileText className="w-8 h-8" />;
     }
-    if (mimeType.includes('word') || mimeType.includes('document')) {
+    const lower = mimeType.toLowerCase();
+    if (lower === 'application/pdf') {
       return <FileText className="w-8 h-8" />;
     }
-    if (mimeType.includes('sheet') || mimeType.includes('excel')) {
+    if (lower.includes('word') || lower.includes('document')) {
+      return <FileText className="w-8 h-8" />;
+    }
+    if (lower.includes('sheet') || lower.includes('excel')) {
       return <FileText className="w-8 h-8" />;
     }
     return <FileText className="w-8 h-8" />;
@@ -97,17 +101,17 @@ export function AttachmentPreview({
   // ── Imagen ──────────────────────────────────────────────────────
   if (attachmentType === 'image') {
     return (
-      <div className="mb-1 rounded-xl overflow-hidden max-w-[280px]">
+      <div className="mb-1 rounded-xl overflow-hidden w-full max-w-[280px]">
         {loading ? (
-          <div className="w-[280px] h-[180px] bg-black/10 flex items-center justify-center rounded-xl">
+          <div className="w-full aspect-[4/3] max-h-[180px] bg-black/10 flex items-center justify-center rounded-xl">
             <Loader2 className="w-6 h-6 animate-spin text-white/70" />
           </div>
         ) : thumbnailUrl ? (
-          <div className="relative group cursor-pointer" onClick={() => onViewImage(attachmentId)}>
+          <div className="relative group cursor-pointer w-full" onClick={() => onViewImage(attachmentId)}>
             <img
               src={thumbnailUrl}
               alt={filename}
-              className="w-full h-auto rounded-xl object-cover max-h-[300px]"
+              className="w-full max-w-full h-auto rounded-xl object-cover max-h-[300px] block"
               loading="lazy"
             />
             {/* Overlay al hover */}
@@ -117,7 +121,7 @@ export function AttachmentPreview({
           </div>
         ) : (
           <div
-            className="w-[280px] h-[120px] bg-black/10 flex flex-col items-center justify-center rounded-xl cursor-pointer gap-2"
+            className="w-full aspect-[16/10] max-h-[120px] bg-black/10 flex flex-col items-center justify-center rounded-xl cursor-pointer gap-2"
             onClick={() => onViewImage(attachmentId)}
           >
             <ImageIcon className="w-8 h-8 text-white/60" />
@@ -167,7 +171,7 @@ export function AttachmentPreview({
           {filename}
         </p>
         <p className={`text-[12px] ${isOwnMessage ? 'text-white/60' : 'text-[#65676b]'}`}>
-          {formatSize(sizeBytes)} · {mimeType.split('/')[1]?.toUpperCase() || 'FILE'}
+          {formatSize(sizeBytes)} · {(mimeType && typeof mimeType === 'string' && mimeType.split('/')[1]?.toUpperCase()) || 'FILE'}
         </p>
       </div>
       <div className={`flex-shrink-0 ${isOwnMessage ? 'text-white/70' : 'text-[#65676b]'}`}>

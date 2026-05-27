@@ -92,7 +92,7 @@ export function useAuth() {
     const loginResult = await loginFn(email, password);
 
     // Guardar claves en memoria (storageKey se calcula en loginFn)
-    const storageKey = pbkdf2(loginResult.id, 'storage-salt', 1000, 32);
+    const storageKey = useAuthStore.getState().storageKey || pbkdf2(loginResult.id, 'storage-salt', 1000, 32);
     setKeys(secrets.dhKeyPair.privateKey, secrets.passwordDerivedKey, storageKey);
 
     return loginResult;

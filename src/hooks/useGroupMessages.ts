@@ -36,7 +36,8 @@ function getRealtimeClient() {
 }
 
 export function useGroupMessages(groupId: string) {
-  const { user, token } = useAuthStore();
+  const user = useAuthStore(s => s.user);
+  const token = useAuthStore(s => s.token);
 
   const [messages,    setMessages]    = useState<GroupMessage[]>([]);
   const [loading,     setLoading]     = useState(true);

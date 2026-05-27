@@ -18,7 +18,7 @@ export function GroupMembersList({
   currentUserRole,
   onChanged,
 }: GroupMembersListProps) {
-  const { user } = useAuthStore();
+  const user = useAuthStore(s => s.user);
   const { removeMember, loading: removing } = useRemoveMember();
   const [roleTarget, setRoleTarget] = useState<GroupMember | null>(null);
 

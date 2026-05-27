@@ -6,6 +6,7 @@ import { MessageReactions } from '@/components/chat/MessageReactions';
 import { QuotedMessage } from '@/components/chat/QuotedMessage';
 import { AttachmentPreview } from '@/components/chat/AttachmentPreview';
 import { VoicePlayer } from '@/components/chat/VoicePlayer';
+import { cleanAttachmentText } from '@/lib/crypto/message-crypto';
 
 export interface MessageData {
   id: string;
@@ -87,7 +88,7 @@ function MessageTileInner({
       {/* Mensaje citado */}
       {replySource && (
         <QuotedMessage
-          text={replySource.isDeleted ? 'Mensaje eliminado' : (replySource.text || '')}
+          text={replySource.isDeleted ? 'Mensaje eliminado' : cleanAttachmentText(replySource.text || '')}
           senderName={replySource.senderId === currentUserId ? 'Tú' : otherUsername}
           isMe={isMe}
         />
@@ -218,7 +219,7 @@ function MessageTileInner({
               />
             ) : (
               <>
-                <p className="text-[15px] leading-tight">{msg.text || '[Mensaje cifrado]'}</p>
+                <p className="text-[15px] leading-tight">{cleanAttachmentText(msg.text || '[Mensaje cifrado]')}</p>
                 {msg.editedAt && (
                   <span className={`text-[11px] ${isMe ? 'text-blue-100' : 'text-[#65676b]'}`}> · editado</span>
                 )}

@@ -1,6 +1,7 @@
 'use client';
 
 import { X } from 'lucide-react';
+import { cleanAttachmentText } from '@/lib/crypto/message-crypto';
 
 interface ReplyPreviewProps {
   text: string;
@@ -12,7 +13,8 @@ interface ReplyPreviewProps {
  * Barra que aparece encima del input cuando el usuario va a responder un mensaje.
  */
 export function ReplyPreview({ text, senderName, onCancel }: ReplyPreviewProps) {
-  const truncated = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+  const cleaned = cleanAttachmentText(text);
+  const truncated = cleaned.length > 60 ? `${cleaned.slice(0, 60)}…` : cleaned;
 
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 mb-2 rounded-xl bg-[#f0f2f5] border-l-2 border-[#0084ff]">

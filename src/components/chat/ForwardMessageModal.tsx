@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { X, Send, Search } from 'lucide-react';
 import { supabase } from '@/lib/supabase/client';
+import { cleanAttachmentText } from '@/lib/crypto/message-crypto';
 
 interface Conversation {
   id: string;
@@ -168,7 +169,7 @@ export function ForwardMessageModal({
         {/* Preview del mensaje */}
         <div className="px-5 py-3 bg-[#f0f2f5] border-b border-[#e4e6eb]">
           <p className="text-[12px] text-[#65676b] mb-1">Mensaje a reenviar:</p>
-          <p className="text-[14px] text-[#050505] line-clamp-2">{messageText}</p>
+          <p className="text-[14px] text-[#050505] line-clamp-2">{cleanAttachmentText(messageText)}</p>
         </div>
 
         {/* Buscador */}
