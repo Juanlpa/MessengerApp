@@ -389,6 +389,13 @@ export function useWebRTC(
     setIsAudioOnly(audioOnly);
     setCallStateSafe('calling');
     playRingtone();
+
+    // Pre-derivar clave horaria — evita race condition donde el receiver transform
+    // se configura tarde y los primeros frames cifrados llegan sin descifrar
+    if (sharedKeyRef.current && isInsertableStreamsSupported()) {
+      try { await getHourlyKey(sharedKeyRef.current); } catch {}
+    }
+
     peerConnection.current = createPeerConnection();
 
     const offer = await peerConnection.current.createOffer();
@@ -427,6 +434,11 @@ export function useWebRTC(
     }
     if (!peerConnection.current) return;
 
+    // Pre-derivar clave horaria — evita race condition con los primeros frames
+    if (sharedKeyRef.current && isInsertableStreamsSupported()) {
+      try { await getHourlyKey(sharedKeyRef.current); } catch {}
+    }
+
     const currentPc = peerConnection.current;
     // Use Promise.all so all transforms are set up BEFORE creating the answer SDP
     await Promise.all(localStream.current!.getTracks().map(async (track) => {
@@ -462,27 +474,40 @@ export function useWebRTC(
    * Señala al participante actual para que migre al canal mesh, luego limpia la llamada 1-a-1.
    * El llamador debe iniciar la llamada grupal (joinGroupCall) después de llamar esto.
    */
+  /**
+   * Invita a un contacto a unirse a la llamada (1-a-1 → grupal).
+   * NO hace cleanup automáticamente — el caller debe coordinar el cleanup
+   * con joinGroupCall para evitar gap visual donde no se ve ningún modal.
+   */
   const inviteToCall = useCallback(async (contactId: string, _contactName: string) => {
     // Signal current peer to switch to group call
     sendSignal({ type: 'upgrade-to-group' });
 
-    // Notify the new contact in parallel with the propagation delay
-    const [,] = await Promise.all([
+    // Notify the new contact — flag isGroupCall=true para que se una directo al canal mesh
+    await Promise.all([
       notifyGlobalChannel(contactId, 'incoming-call', {
         conversationId,
         callerId: currentUserId,
         callerName: currentUsername ?? currentUserId,
         callId: callIdRef.current,
+        isGroupCall: true,
+        isAudioOnly: isAudioOnlyRef.current,
       }),
       // Wait for upgrade-to-group signal to reach Bob before tearing down the channel
       new Promise<void>(resolve => setTimeout(resolve, 1000)),
     ]);
+  }, [sendSignal, notifyGlobalChannel, conversationId, currentUserId, currentUsername]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /**
+   * Cierra la llamada 1-a-1 sin enviar 'hangup' al peer (usar después de upgrade-to-group).
+   * Útil para transicionar a llamada grupal sin que el otro lado vea "llamada terminada".
+   */
+  const endOneToOneCall = useCallback(async () => {
     const duration = callStartTimeRef.current
       ? Math.round((Date.now() - callStartTimeRef.current) / 1000)
       : undefined;
     await cleanupRef.current?.(undefined, duration);
-  }, [sendSignal, notifyGlobalChannel, conversationId, currentUserId, currentUsername]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const endCall = useCallback(() => {
     sendSignal({ type: 'hangup' });
@@ -575,6 +600,7 @@ export function useWebRTC(
     endCall,
     forceIdle,
     inviteToCall,
+    endOneToOneCall,
     toggleAudio,
     toggleVideo,
     isAudioMuted,

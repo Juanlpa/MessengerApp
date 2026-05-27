@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import dynamic from 'next/dynamic';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
+import { useCallStore } from '@/stores/call-store';
 import Link from 'next/link';
 import { Video, Phone, Users, Search, X } from 'lucide-react';
 import { useWebRTC } from '@/hooks/useWebRTC';
@@ -74,7 +75,10 @@ interface Message {
 
 export default function ConversationPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const conversationId = params.conversationId as string;
+  const shouldAutoJoinGroup = searchParams?.get('joinGroupCall') === '1';
   const user = useAuthStore(s => s.user);
   const token = useAuthStore(s => s.token);
   const cachedStorageKey = useAuthStore(s => s.storageKey);
@@ -174,6 +178,7 @@ export default function ConversationPage() {
     rejectCall,
     endCall,
     inviteToCall,
+    endOneToOneCall,
     forceIdle,
     toggleAudio,
     toggleVideo,
@@ -225,10 +230,22 @@ export default function ConversationPage() {
   }, [callState, groupCallState, stopPipeline]);
 
   // Invitar a tercer participante (convierte 1-a-1 en grupal)
+  // Orden: 1) avisar upgrade y notificar a Charlie  2) cerrar PC 1-a-1 (libera cámara)
+  //        3) unirse al canal mesh con cámara recién liberada
+  // Esto minimiza el gap visual entre que se cierra CallModal y se abre GroupCallModal.
   const handleAddParticipant = useCallback(async (contactId: string, contactName: string) => {
-    await inviteToCall(contactId, contactName);
-    await joinGroupCall();
-  }, [inviteToCall, joinGroupCall]);
+    try {
+      // 1. Enviar upgrade-to-group a Bob y notificar a Charlie (con flag isGroupCall)
+      await inviteToCall(contactId, contactName);
+      // 2. Cerrar PC 1-a-1 — esto libera la cámara/mic para reusarla
+      await endOneToOneCall();
+      // 3. Unirse al canal mesh
+      await joinGroupCall();
+    } catch (err) {
+      console.error('Failed to add participant:', err);
+      alert('No se pudo agregar el participante. Inténtalo de nuevo.');
+    }
+  }, [inviteToCall, endOneToOneCall, joinGroupCall]);
 
   // Handlers para visor de imágenes y adjuntos
   const handleViewImage = useCallback((id: string) => {
@@ -448,6 +465,27 @@ export default function ConversationPage() {
   useEffect(() => {
     initConversation();
   }, [initConversation]);
+
+  // Auto-unirse al canal de llamada grupal cuando:
+  //   - Charlie aceptó banner con flag isGroupCall (query param ?joinGroupCall=1)
+  //   - Charlie ya estaba en el chat y le llegó un incoming-call grupal (pendingGroupJoin)
+  const hasAutoJoinedRef = useRef(false);
+  const pendingGroupJoin = useCallStore(s => s.pendingGroupJoin);
+  const setPendingGroupJoin = useCallStore(s => s.setPendingGroupJoin);
+  useEffect(() => {
+    const shouldJoin = shouldAutoJoinGroup || pendingGroupJoin === conversationId;
+    if (!shouldJoin || hasAutoJoinedRef.current) return;
+    if (!sharedKey || !user?.id) return;
+    if (groupCallState !== 'idle') return;
+
+    hasAutoJoinedRef.current = true;
+    joinGroupCall().catch(err => {
+      console.error('Auto-join group call failed:', err);
+      hasAutoJoinedRef.current = false; // permitir reintento manual
+    });
+    if (pendingGroupJoin === conversationId) setPendingGroupJoin(null);
+    if (shouldAutoJoinGroup) router.replace(`/chat/${conversationId}`);
+  }, [shouldAutoJoinGroup, pendingGroupJoin, sharedKey, user?.id, groupCallState, joinGroupCall, router, conversationId, setPendingGroupJoin]);
 
   // Scroll al fondo solo en la carga inicial
   useEffect(() => {

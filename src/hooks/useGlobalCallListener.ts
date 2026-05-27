@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase/client';
 import { useCallStore } from '@/stores/call-store';
 
 export function useGlobalCallListener(userId: string) {
-  const { setIncomingCall, clearIncomingCall } = useCallStore();
+  const { setIncomingCall, clearIncomingCall, setPendingGroupJoin } = useCallStore();
 
   useEffect(() => {
     if (!userId) return;
@@ -14,15 +14,25 @@ export function useGlobalCallListener(userId: string) {
 
     channel
       .on('broadcast', { event: 'incoming-call' }, ({ payload }) => {
-        // If the user is already in that conversation, the CallModal handles it directly
         const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
-        if (currentPath.includes(`/chat/${payload.conversationId}`)) return;
+        const alreadyInConv = currentPath.includes(`/chat/${payload.conversationId}`);
+
+        // Si ya está en esa conversación:
+        //   - 1-a-1: el useWebRTC del chat maneja la llamada vía canal `call_${conversationId}`
+        //   - Grupal: hay que disparar joinGroupCall (page.tsx escucha pendingGroupJoin)
+        if (alreadyInConv) {
+          if (payload.isGroupCall) {
+            setPendingGroupJoin(payload.conversationId);
+          }
+          return;
+        }
 
         setIncomingCall({
           conversationId: payload.conversationId,
           callerId: payload.callerId,
           callerName: payload.callerName,
           isAudioOnly: payload.isAudioOnly ?? false,
+          isGroupCall: payload.isGroupCall ?? false,
         });
       })
       .on('broadcast', { event: 'call-cancelled' }, () => {

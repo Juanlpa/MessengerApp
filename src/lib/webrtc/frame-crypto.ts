@@ -102,7 +102,8 @@ export async function decryptFrame(
 
     frame.data = newData.buffer;
   } catch {
-    // Si falla el descifrado, pasar frame vacío para no romper el stream
-    frame.data = new ArrayBuffer(0);
+    // No descartar el frame — el decoder puede mostrar artefactos pero
+    // se recupera al llegar el próximo I-frame. Descartar (ArrayBuffer(0))
+    // congela el video porque el decoder pierde sincronización.
   }
 }

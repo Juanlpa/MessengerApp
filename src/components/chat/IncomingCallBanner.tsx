@@ -24,7 +24,11 @@ export function IncomingCallBanner() {
   if (!incomingCall) return null;
 
   const handleAccept = () => {
-    router.push(`/chat/${incomingCall.conversationId}`);
+    // Si es llamada grupal, pasar el flag por query param para auto-unirse
+    const url = incomingCall.isGroupCall
+      ? `/chat/${incomingCall.conversationId}?joinGroupCall=1`
+      : `/chat/${incomingCall.conversationId}`;
+    router.push(url);
     clearIncomingCall();
   };
 

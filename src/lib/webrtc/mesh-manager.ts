@@ -12,7 +12,8 @@
  *   ice        { from, to, candidate }
  */
 
-import { createClient, RealtimeChannel } from '@supabase/supabase-js';
+import { RealtimeChannel } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabase/client';
 import {
   isInsertableStreamsSupported,
   setupSenderTransform,
@@ -52,7 +53,6 @@ export class MeshManager {
   private speakingInterval: ReturnType<typeof setInterval> | null = null;
   private hourlyKeyCache: { hourIndex: number; key: Promise<CryptoKey> } | null = null;
   private onParticipantsChange: OnParticipantsChange;
-  private supabase;
 
   constructor(
     private conversationId: string,
@@ -61,10 +61,6 @@ export class MeshManager {
     onParticipantsChange: OnParticipantsChange
   ) {
     this.onParticipantsChange = onParticipantsChange;
-    this.supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
   }
 
   async join(localStream: MediaStream, sharedKey?: Uint8Array | null) {
@@ -80,31 +76,29 @@ export class MeshManager {
 
     this.localStream = localStream;
     this.sharedKey = sharedKey ?? null;
-    this.setupSignaling();
 
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Realtime subscription timed out'));
-      }, 5000);
+    // Pre-derivar la clave horaria — evita race condition donde llegan
+    // frames cifrados antes de que el receiver transform esté listo
+    if (this.sharedKey && isInsertableStreamsSupported()) {
+      try { await this.getHourlyKey(); } catch {}
+    }
 
-      this.channel!.subscribe((status, err) => {
-        if (status === 'SUBSCRIBED') {
-          clearTimeout(timeout);
-          resolve();
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          clearTimeout(timeout);
-          reject(err || new Error(`Realtime subscription failed with status: ${status}`));
-        }
-      });
-    });
+    // setupSignaling() crea el canal y lo suscribe; await aquí espera la confirmación
+    await this.setupSignaling();
 
     // Anunciar entrada al grupo
     this.send('join', { userId: this.userId, username: this.username });
     this.startSpeakingDetection();
   }
 
-  private setupSignaling() {
-    this.channel = this.supabase.channel(`group_call_${this.conversationId}`, {
+  private async setupSignaling() {
+    // Limpiar canales previos con el mismo topic (re-entrada después de desconexión)
+    const topic = `realtime:group_call_${this.conversationId}`;
+    supabase.getChannels()
+      .filter(ch => ch.topic === topic)
+      .forEach(ch => supabase.removeChannel(ch));
+
+    this.channel = supabase.channel(`group_call_${this.conversationId}`, {
       config: { broadcast: { self: false } },
     });
 
@@ -170,8 +164,24 @@ export class MeshManager {
           queue.push(candidate);
           this.pendingCandidates.set(from, queue);
         }
-      })
-      .subscribe();
+      });
+
+    // Suscribir y esperar la confirmación SUBSCRIBED (con timeout de 10s)
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Realtime subscription timed out'));
+      }, 10000);
+
+      this.channel!.subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') {
+          clearTimeout(timeout);
+          resolve();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          clearTimeout(timeout);
+          reject(err || new Error(`Realtime subscription failed: ${status}`));
+        }
+      });
+    });
   }
 
   private addParticipant(userId: string, username: string) {
@@ -312,7 +322,7 @@ export class MeshManager {
     this.pendingCandidates.clear();
     this.audioContext?.close().catch(() => {});
     this.audioContext = null;
-    if (this.channel) this.supabase.removeChannel(this.channel);
+    if (this.channel) supabase.removeChannel(this.channel);
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
     this.notify();
