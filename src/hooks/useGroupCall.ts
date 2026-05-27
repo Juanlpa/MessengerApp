@@ -51,6 +51,8 @@ export function useGroupCall(
       const error = err as Error;
       if (error.message?.includes('Máximo')) {
         alert(error.message);
+      } else if (error.message?.includes('subscription') || error.message?.includes('timed out')) {
+        alert('Error de conexión con el canal de llamada. Por favor, inténtalo de nuevo.');
       } else {
         alert('No se pudo acceder a la cámara/micrófono. Verifica los permisos.');
       }

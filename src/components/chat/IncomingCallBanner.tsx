@@ -32,6 +32,9 @@ export function IncomingCallBanner() {
     if (user?.id) {
       // Notify the caller so they see "Llamada rechazada" immediately instead of waiting 30s
       const ch = supabase.channel(`call_${incomingCall.conversationId}`);
+      const timeout = setTimeout(() => {
+        supabase.removeChannel(ch);
+      }, 3000);
       ch.subscribe((status) => {
         if (status === 'SUBSCRIBED') {
           ch.send({
@@ -39,7 +42,13 @@ export function IncomingCallBanner() {
             event: 'signal',
             payload: { type: 'reject', senderId: user.id },
           });
-          setTimeout(() => supabase.removeChannel(ch), 500);
+          setTimeout(() => {
+            clearTimeout(timeout);
+            supabase.removeChannel(ch);
+          }, 500);
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          clearTimeout(timeout);
+          supabase.removeChannel(ch);
         }
       });
     }

@@ -82,9 +82,19 @@ export class MeshManager {
     this.sharedKey = sharedKey ?? null;
     this.setupSignaling();
 
-    await new Promise<void>((resolve) => {
-      this.channel!.subscribe((status) => {
-        if (status === 'SUBSCRIBED') resolve();
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Realtime subscription timed out'));
+      }, 5000);
+
+      this.channel!.subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') {
+          clearTimeout(timeout);
+          resolve();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          clearTimeout(timeout);
+          reject(err || new Error(`Realtime subscription failed with status: ${status}`));
+        }
       });
     });
 

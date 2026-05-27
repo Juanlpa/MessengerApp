@@ -240,7 +240,7 @@ export function useWebRTC(
         } else if (signal.type === 'upgrade-to-group') {
           // The other party added a third person — end 1-to-1 and join group call
           stopRingtone();
-          await cleanupRef.current?.('ended');
+          await cleanupRef.current?.();
           try {
             await onUpgradeToGroupRef.current?.();
           } catch {
@@ -273,13 +273,23 @@ export function useWebRTC(
   ) => {
     const globalCh = supabase.channel(`call_global_${targetUserId}`);
     await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        supabase.removeChannel(globalCh);
+        resolve();
+      }, 3000);
+
       globalCh.subscribe((status) => {
         if (status === 'SUBSCRIBED') {
           globalCh.send({ type: 'broadcast', event, payload: data });
           setTimeout(() => {
+            clearTimeout(timeout);
             supabase.removeChannel(globalCh);
             resolve();
           }, 500);
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          clearTimeout(timeout);
+          supabase.removeChannel(globalCh);
+          resolve();
         }
       });
     });
@@ -471,7 +481,7 @@ export function useWebRTC(
     const duration = callStartTimeRef.current
       ? Math.round((Date.now() - callStartTimeRef.current) / 1000)
       : undefined;
-    await cleanupRef.current?.('ended', duration);
+    await cleanupRef.current?.(undefined, duration);
   }, [sendSignal, notifyGlobalChannel, conversationId, currentUserId, currentUsername]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const endCall = useCallback(() => {
