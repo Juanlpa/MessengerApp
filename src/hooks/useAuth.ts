@@ -32,36 +32,6 @@ export function useAuth() {
     }
   }, [setAuth, setKeys, logout, setLoading]);
 
-  const register = useCallback(async (
-    email: string,
-    username: string,
-    password: string
-  ) => {
-    // Cripto del lado del cliente (async: DH key pair se genera en Web Worker)
-    const { data, secrets } = await prepareRegistration(email, username, password);
-
-    // Enviar al servidor (password NUNCA sale en claro)
-    const res = await fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Registration failed');
-    }
-
-    // Auto-login después de registro
-    const loginResult = await loginFn(email, password);
-
-    // Guardar claves en memoria (storageKey se calcula en loginFn)
-    const storageKey = pbkdf2(loginResult.id, 'storage-salt', 1000, 32);
-    setKeys(secrets.dhKeyPair.privateKey, secrets.passwordDerivedKey, storageKey);
-
-    return loginResult;
-  }, [setKeys]);
-
   const loginFn = useCallback(async (email: string, password: string) => {
     // 1. Pedir salt al servidor
     const saltRes = await fetch('/api/auth/salt', {
@@ -97,6 +67,36 @@ export function useAuth() {
 
     return newUser;
   }, [setAuth, setKeys]);
+
+  const register = useCallback(async (
+    email: string,
+    username: string,
+    password: string
+  ) => {
+    // Cripto del lado del cliente (async: DH key pair se genera en Web Worker)
+    const { data, secrets } = await prepareRegistration(email, username, password);
+
+    // Enviar al servidor (password NUNCA sale en claro)
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Registration failed');
+    }
+
+    // Auto-login después de registro
+    const loginResult = await loginFn(email, password);
+
+    // Guardar claves en memoria (storageKey se calcula en loginFn)
+    const storageKey = pbkdf2(loginResult.id, 'storage-salt', 1000, 32);
+    setKeys(secrets.dhKeyPair.privateKey, secrets.passwordDerivedKey, storageKey);
+
+    return loginResult;
+  }, [setKeys, loginFn]);
 
   return {
     user,

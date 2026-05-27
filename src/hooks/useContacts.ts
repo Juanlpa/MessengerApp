@@ -33,7 +33,7 @@ function authHeader(token: string) {
 
 /** Lista de amigos aceptados del usuario actual */
 export function useContacts() {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [contacts, setContacts] = useState<ContactFriend[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +61,8 @@ export function useContacts() {
 
 /** Solicitudes de amistad recibidas pendientes */
 export function usePendingRequests() {
-  const { token, user } = useAuthStore();
+  const token = useAuthStore(s => s.token);
+  const user = useAuthStore(s => s.user);
   const [requests, setRequests] = useState<PendingRequest[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -120,7 +121,7 @@ export function usePendingRequests() {
 
 /** Solicitudes enviadas pendientes */
 export function useSentRequests() {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [requests, setRequests] = useState<SentRequest[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -143,7 +144,7 @@ export function useSentRequests() {
 
 /** Mutation: enviar solicitud de amistad */
 export function useSendRequest() {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -176,7 +177,7 @@ export function useSendRequest() {
 
 /** Mutation: aceptar o rechazar solicitud */
 export function useRespondRequest() {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -209,7 +210,7 @@ export function useRespondRequest() {
 
 /** Mutation: eliminar contacto */
 export function useDeleteContact() {
-  const { token } = useAuthStore();
+  const token = useAuthStore(s => s.token);
   const [loading, setLoading] = useState(false);
 
   const deleteContact = useCallback(

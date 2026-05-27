@@ -25,7 +25,17 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
     if (token && savedUser) {
       try {
         const parsed = JSON.parse(savedUser);
-        useAuthStore.getState().setAuth(parsed, token);
+        // Calcular storageKey junto con setAuth — evita estado intermedio
+        // donde storageKey=null causaba que page.tsx recalculara PBKDF2 en
+        // cada apertura de chat (al entrar directo a /chat/[id] sin pasar por login)
+        import('@/lib/crypto/pbkdf2').then(({ pbkdf2 }) => {
+          const storageKey = pbkdf2(parsed.id, 'storage-salt', 1000, 32);
+          useAuthStore.getState().setAuth(parsed, token);
+          useAuthStore.getState().setKeys(new Uint8Array(0), new Uint8Array(0), storageKey);
+        }).catch(() => {
+          // Si falla la importación, al menos restaurar la sesión
+          useAuthStore.getState().setAuth(parsed, token);
+        });
       } catch {
         useAuthStore.getState().logout();
         router.push('/auth/login');
