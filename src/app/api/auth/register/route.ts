@@ -80,7 +80,7 @@ export async function POST(
     } = body;
 
 
-    // Requeridos
+    // Campos requeridos
     if (
       !email ||
       !username ||
@@ -172,8 +172,9 @@ export async function POST(
       getSupabaseAdmin();
 
 
+    // VALIDACIÓN SEGURA
     const {
-      data:existing
+      data: emailExists
     } =
     await supabase
 
@@ -181,16 +182,17 @@ export async function POST(
 
     .select('id')
 
-    .or(
-`email.eq.${email},username.eq.${username}`
+    .eq(
+      'email',
+      email.toLowerCase()
     )
 
     .limit(1);
 
 
     if (
-      existing &&
-      existing.length>0
+      emailExists &&
+      emailExists.length > 0
     ) {
 
       await saveAttempt(
@@ -202,7 +204,48 @@ export async function POST(
       return NextResponse.json(
         {
           error:
-          'User already exists'
+          'El correo ya está registrado'
+        },
+        {
+          status:409
+        }
+      );
+
+    }
+
+
+    const {
+      data: usernameExists
+    } =
+    await supabase
+
+    .from('users')
+
+    .select('id')
+
+    .eq(
+      'username',
+      username.toLowerCase()
+    )
+
+    .limit(1);
+
+
+    if (
+      usernameExists &&
+      usernameExists.length > 0
+    ) {
+
+      await saveAttempt(
+        email,
+        ip,
+        false
+      );
+
+      return NextResponse.json(
+        {
+          error:
+          'El nombre de usuario ya existe'
         },
         {
           status:409
