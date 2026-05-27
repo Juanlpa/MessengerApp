@@ -10,129 +10,342 @@ export default function RegisterPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+
+  const [acceptedWarning, setAcceptedWarning] = useState(false);
+
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [cryptoStatus, setCryptoStatus] = useState('');
+
   const router = useRouter();
+
   const { register } = useAuth();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (
+    e: React.FormEvent
+  ) => {
+
     e.preventDefault();
+
     setError('');
 
-    if (password !== confirmPassword) {
-      setError('Las contraseñas no coinciden');
+    if (
+      password !==
+      confirmPassword
+    ) {
+
+      setError(
+        'Las contraseñas no coinciden'
+      );
+
       return;
     }
-    if (password.length < 8) {
-      setError('La contraseña debe tener al menos 8 caracteres');
+
+    if (
+      password.length < 8
+    ) {
+
+      setError(
+        'La contraseña debe tener al menos 8 caracteres'
+      );
+
+      return;
+    }
+
+    if (
+      !acceptedWarning
+    ) {
+
+      setError(
+'Debes aceptar que perderás acceso a todos tus mensajes si olvidas tu contraseña'
+      );
+
       return;
     }
 
     setLoading(true);
+
     try {
-      setCryptoStatus('Generando salt aleatorio...');
-      await new Promise(r => setTimeout(r, 100));
 
-      setCryptoStatus('Derivando clave con PBKDF2 (100,000 iteraciones)...');
-      await new Promise(r => setTimeout(r, 100));
+      setCryptoStatus(
+        'Generando salt aleatorio...'
+      );
 
-      setCryptoStatus('Generando par de claves Diffie-Hellman (2048-bit)...');
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(
+        r=>setTimeout(r,100)
+      );
 
-      await register(email, username, password);
 
-      setCryptoStatus('¡Registro exitoso! Redirigiendo...');
-      router.push('/chat');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al registrar');
-    } finally {
-      setLoading(false);
-      setCryptoStatus('');
+      setCryptoStatus(
+'Derivando clave con PBKDF2 (100,000 iteraciones)...'
+      );
+
+      await new Promise(
+        r=>setTimeout(r,100)
+      );
+
+
+      setCryptoStatus(
+'Generando par de claves Diffie-Hellman (2048-bit)...'
+      );
+
+      await new Promise(
+        r=>setTimeout(r,100)
+      );
+
+
+      await register(
+        email,
+        username,
+        password
+      );
+
+
+      setCryptoStatus(
+        '¡Registro exitoso! Redirigiendo...'
+      );
+
+
+      router.push(
+        '/chat'
+      );
+
     }
+    catch(err){
+
+      setError(
+
+        err instanceof Error
+
+        ?
+
+        err.message
+
+        :
+
+        'Error al registrar'
+
+      );
+
+    }
+
+    finally{
+
+      setLoading(false);
+
+      setCryptoStatus('');
+
+    }
+
   };
 
-  return (
-    <div>
-      <h2 className="text-[20px] leading-6 font-semibold text-[#1c1e21] mb-5 text-center">Crear cuenta nueva</h2>
 
-      <form onSubmit={handleSubmit} className="space-y-3">
+
+  return (
+
+    <div>
+
+      <h2 className="text-[20px] leading-6 font-semibold text-[#1c1e21] mb-5 text-center">
+
+        Crear cuenta nueva
+
+      </h2>
+
+
+      <form
+      onSubmit={handleSubmit}
+      className="space-y-3"
+      >
+
         <div>
+
           <input
             id="register-email"
             type="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e)=>
+            setEmail(
+            e.target.value
+            )}
             required
-            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2] text-[#1c1e21] placeholder-[#90949c] focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
+            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2]"
             placeholder="Correo electrónico"
           />
+
         </div>
 
+
         <div>
+
           <input
             id="register-username"
             type="text"
             value={username}
-            onChange={(e) => setUsername(e.target.value)}
+            onChange={(e)=>
+            setUsername(
+            e.target.value
+            )}
             required
             pattern="[a-zA-Z0-9_]{3,30}"
-            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2] text-[#1c1e21] placeholder-[#90949c] focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
+            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2]"
             placeholder="Nombre de usuario"
           />
+
         </div>
 
+
+
         <div>
+
           <input
             id="register-password"
             type="password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e)=>
+            setPassword(
+            e.target.value
+            )}
             required
             minLength={8}
-            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2] text-[#1c1e21] placeholder-[#90949c] focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
+            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2]"
             placeholder="Contraseña nueva"
           />
+
         </div>
 
+
         <div>
+
           <input
             id="register-confirm"
             type="password"
             value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
+            onChange={(e)=>
+            setConfirmPassword(
+            e.target.value
+            )}
             required
-            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2] text-[#1c1e21] placeholder-[#90949c] focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
+            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2]"
             placeholder="Confirmar contraseña"
           />
+
         </div>
 
-        {cryptoStatus && (
-          <div className="p-2 text-[#1877f2] text-sm text-center">
-            {cryptoStatus}
-          </div>
-        )}
 
-        {error && (
-          <div className="p-3 text-[#f02849] text-sm text-center">
-            {error}
-          </div>
-        )}
+        <div className="mt-2">
+
+          <label className="flex gap-2 items-start text-sm text-gray-700">
+
+            <input
+
+              type="checkbox"
+
+              checked={
+                acceptedWarning
+              }
+
+              onChange={(e)=>
+
+              setAcceptedWarning(
+              e.target.checked
+              )
+
+              }
+
+              required
+
+              className="mt-1"
+
+            />
+
+            <span>
+
+              Si pierdo mi contraseña perderé acceso a todos mis mensajes
+
+            </span>
+
+          </label>
+
+        </div>
+
+
+        {
+
+        cryptoStatus && (
+
+        <div className="p-2 text-[#1877f2] text-sm text-center">
+
+        {cryptoStatus}
+
+        </div>
+
+        )
+
+        }
+
+
+        {
+
+        error && (
+
+        <div className="p-3 text-[#f02849] text-sm text-center">
+
+        {error}
+
+        </div>
+
+        )
+
+        }
+
 
         <button
+
           type="submit"
+
           disabled={loading}
-          className="w-full py-3 px-4 mt-2 rounded-[6px] bg-[#42b72a] hover:bg-[#36a420] text-white font-bold text-[20px] leading-[24px] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+
+          className="w-full py-3 px-4 mt-2 rounded-[6px] bg-[#42b72a] hover:bg-[#36a420] text-white font-bold"
+
         >
-          {loading ? 'Creando cuenta...' : 'Registrarte'}
+
+          {
+
+          loading
+
+          ?
+
+          'Creando cuenta...'
+
+          :
+
+          'Registrarte'
+
+          }
+
         </button>
+
       </form>
 
+
       <div className="mt-4 pt-4 border-t border-[#dadde1] text-center">
-        <Link href="/auth/login" className="inline-block text-[#1877f2] hover:underline font-medium text-[15px] mt-2">
+
+        <Link
+
+        href="/auth/login"
+
+        className="inline-block text-[#1877f2] hover:underline font-medium"
+
+        >
+
           ¿Ya tienes una cuenta?
+
         </Link>
+
       </div>
+
     </div>
+
   );
+
 }

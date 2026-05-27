@@ -1,9 +1,5 @@
 /**
  * POST /api/auth/login
- * 
- * Recibe: { email, passwordHash }
- * El hash fue calculado en el cliente con PBKDF2(password, salt).
- * Compara con el hash almacenado y emite JWT propio.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -16,62 +12,197 @@ interface UserRow {
   email: string;
   username: string;
   password_hash: string;
+  salt: string;
   dh_public_key: string;
 }
 
 export async function POST(request: NextRequest) {
+
   try {
+
     const body = await request.json();
-    const { email, passwordHash } = body;
 
-    if (!email || !passwordHash) {
+    const {
+      email,
+      passwordHash
+    } = body;
+
+    if (
+      !email ||
+      !passwordHash
+    ) {
+
       return NextResponse.json(
-        { error: 'Email and passwordHash are required' },
-        { status: 400 }
+        {
+          error:'Email and passwordHash required'
+        },
+        {
+          status:400
+        }
       );
+
     }
 
-    const supabase = getSupabaseAdmin();
+    const supabase =
+      getSupabaseAdmin();
 
-    // Buscar usuario por email
-    const { data } = await supabase
-      .from('users')
-      .select('id, email, username, password_hash, dh_public_key')
-      .eq('email', email.toLowerCase())
-      .single();
+    const {
+      data
+    } =
+    await supabase
 
-    const user = data as UserRow | null;
+    .from(
+      'users'
+    )
 
-    if (!user) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+    .select(
+      `
+      id,
+      email,
+      username,
+      password_hash,
+      salt,
+      dh_public_key
+      `
+    )
+
+    .eq(
+      'email',
+      email.toLowerCase()
+    )
+
+    .single();
+
+    const user =
+      data as UserRow | null;
+
+    if(!user){
+
+      console.log(
+        'USUARIO NO ENCONTRADO'
+      );
+
+      return NextResponse.json(
+        {
+          error:'Invalid credentials'
+        },
+        {
+          status:401
+        }
+      );
+
     }
 
-    // Comparar hashes en tiempo constante
-    const storedHash = fromHex(user.password_hash);
-    const providedHash = fromHex(passwordHash);
+    // logs
+    console.log(
+      'EMAIL:',
+      email
+    );
 
-    if (!constantTimeEqual(storedHash, providedHash)) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+    console.log(
+      'SALT DB:',
+      user.salt
+    );
+
+    console.log(
+      'HASH FRONT:',
+      passwordHash
+    );
+
+    console.log(
+      'HASH DB:',
+      user.password_hash
+    );
+
+
+    const storedHash =
+      fromHex(
+        user.password_hash
+      );
+
+    const providedHash =
+      fromHex(
+        passwordHash
+      );
+
+
+    const valid =
+      constantTimeEqual(
+        storedHash,
+        providedHash
+      );
+
+    console.log(
+      'MATCH:',
+      valid
+    );
+
+
+    if(!valid){
+
+      return NextResponse.json(
+        {
+          error:'Invalid credentials'
+        },
+        {
+          status:401
+        }
+      );
+
     }
 
-    // Generar JWT propio
-    const payload = createJWTPayload({
-      id: user.id,
-      email: user.email,
-      username: user.username,
+
+    const payload =
+    createJWTPayload({
+
+      id:user.id,
+
+      email:user.email,
+
+      username:user.username
+
     });
-    const token = signJWT(payload);
+
+
+    const token =
+      signJWT(
+        payload
+      );
+
 
     return NextResponse.json({
+
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        username: user.username,
-      },
+
+      user:{
+
+        id:user.id,
+
+        email:user.email,
+
+        username:user.username
+
+      }
+
     });
-  } catch (err) {
-    console.error('Login error:', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+
   }
+  catch(err){
+
+    console.error(
+      'LOGIN ERROR:',
+      err
+    );
+
+    return NextResponse.json(
+      {
+        error:'Internal server error'
+      },
+      {
+        status:500
+      }
+    );
+
+  }
+
 }

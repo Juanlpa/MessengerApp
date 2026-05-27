@@ -1,85 +1,374 @@
 /**
  * POST /api/auth/register
- * 
- * Recibe: { email, username, passwordHash, salt, dhPublicKey }
- * El password NUNCA llega en texto plano — el cliente hace PBKDF2 antes de enviar.
- * Almacena el hash y crea el usuario.
+ *
+ * Recibe:
+ * { email, username, passwordHash, salt, dhPublicKey }
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 
-export async function POST(request: NextRequest) {
+import {
+  checkRateLimit,
+  saveAttempt
+} from '@/lib/auth/rateLimit';
+
+import { logSecurityEvent } from '../../../../lib/auth/securityLogs';
+
+
+export async function POST(
+  request: NextRequest
+) {
+
   try {
-    const body = await request.json();
-    const { email, username, passwordHash, salt, dhPublicKey } = body;
 
-    // Validar campos requeridos
-    if (!email || !username || !passwordHash || !salt || !dhPublicKey) {
-      return NextResponse.json(
-        { error: 'Missing required fields: email, username, passwordHash, salt, dhPublicKey' },
-        { status: 400 }
+    const ip =
+      request.headers.get(
+        'x-forwarded-for'
+      ) || 'unknown';
+
+    const userAgent =
+      request.headers.get(
+        'user-agent'
+      ) || 'unknown';
+
+
+    // Anti bruteforce
+    const allowed =
+      await checkRateLimit(ip);
+
+    if (!allowed) {
+
+      await logSecurityEvent(
+        'RATE_LIMIT_BLOCK',
+        null,
+        {
+          ip,
+          userAgent
+        }
       );
-    }
 
-    // Validar formato de email
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return NextResponse.json({ error: 'Invalid email format' }, { status: 400 });
-    }
-
-    // Validar que username sea alfanumérico
-    if (!/^[a-zA-Z0-9_]{3,30}$/.test(username)) {
       return NextResponse.json(
-        { error: 'Username must be 3-30 alphanumeric characters or underscores' },
-        { status: 400 }
+        {
+          error:
+          'Too many attempts. Try again later.'
+        },
+        {
+          status:429
+        }
       );
+
     }
 
-    // Validar que passwordHash es hex (no plaintext)
-    if (!/^[0-9a-f]{64}$/.test(passwordHash)) {
+
+    const body =
+      await request.json();
+
+    const {
+
+      email,
+
+      username,
+
+      passwordHash,
+
+      salt,
+
+      dhPublicKey
+
+    } = body;
+
+
+    // Campos requeridos
+    if (
+      !email ||
+      !username ||
+      !passwordHash ||
+      !salt ||
+      !dhPublicKey
+    ) {
+
+      await saveAttempt(
+        email || '',
+        ip,
+        false
+      );
+
+      await logSecurityEvent(
+        'REGISTER_FAILED',
+        null,
+        {
+          ip,
+          reason:
+          'Missing fields'
+        }
+      );
+
       return NextResponse.json(
-        { error: 'passwordHash must be a 64-character hex string (SHA-256 output)' },
-        { status: 400 }
+        {
+          error:
+          'Missing required fields'
+        },
+        {
+          status:400
+        }
       );
+
     }
 
-    const supabase = getSupabaseAdmin();
 
-    // Verificar si email o username ya existen
-    const { data: existing } = await supabase
-      .from('users')
-      .select('id')
-      .or(`email.eq.${email},username.eq.${username}`)
-      .limit(1);
+    // Email válido
+    if (
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      .test(email)
+    ) {
 
-    if (existing && existing.length > 0) {
+      await saveAttempt(
+        email,
+        ip,
+        false
+      );
+
       return NextResponse.json(
-        { error: 'Email or username already exists' },
-        { status: 409 }
+        {
+          error:
+          'Invalid email'
+        },
+        {
+          status:400
+        }
       );
+
     }
 
-    // Insertar usuario
-    const { data: user, error } = await supabase
-      .from('users')
-      .insert({
-        email: email.toLowerCase(),
-        username: username.toLowerCase(),
-        password_hash: passwordHash,
-        salt,
-        dh_public_key: dhPublicKey,
-      })
-      .select('id, email, username, created_at')
-      .single();
 
-    if (error) {
-      console.error('Register error:', error);
-      return NextResponse.json({ error: 'Failed to create user' }, { status: 500 });
+    // Username válido
+    if (
+      !/^[a-zA-Z0-9_]{3,30}$/
+      .test(username)
+    ) {
+
+      await saveAttempt(
+        email,
+        ip,
+        false
+      );
+
+      return NextResponse.json(
+        {
+          error:
+          'Username invalid'
+        },
+        {
+          status:400
+        }
+      );
+
     }
 
-    return NextResponse.json({ user }, { status: 201 });
-  } catch (err) {
-    console.error('Register error:', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+
+    const supabase =
+      getSupabaseAdmin();
+
+
+    // VALIDACIÓN SEGURA
+    const {
+      data: emailExists
+    } =
+    await supabase
+
+    .from('users')
+
+    .select('id')
+
+    .eq(
+      'email',
+      email.toLowerCase()
+    )
+
+    .limit(1);
+
+
+    if (
+      emailExists &&
+      emailExists.length > 0
+    ) {
+
+      await saveAttempt(
+        email,
+        ip,
+        false
+      );
+
+      return NextResponse.json(
+        {
+          error:
+          'El correo ya está registrado'
+        },
+        {
+          status:409
+        }
+      );
+
+    }
+
+
+    const {
+      data: usernameExists
+    } =
+    await supabase
+
+    .from('users')
+
+    .select('id')
+
+    .eq(
+      'username',
+      username.toLowerCase()
+    )
+
+    .limit(1);
+
+
+    if (
+      usernameExists &&
+      usernameExists.length > 0
+    ) {
+
+      await saveAttempt(
+        email,
+        ip,
+        false
+      );
+
+      return NextResponse.json(
+        {
+          error:
+          'El nombre de usuario ya existe'
+        },
+        {
+          status:409
+        }
+      );
+
+    }
+
+
+    const {
+
+      data:user,
+
+      error
+
+    } =
+    await supabase
+
+    .from('users')
+
+    .insert({
+
+      email:
+      email.toLowerCase(),
+
+      username:
+      username.toLowerCase(),
+
+      password_hash:
+      passwordHash,
+
+      salt,
+
+      dh_public_key:
+      dhPublicKey
+
+    })
+
+    .select(
+'id,email,username,created_at'
+    )
+
+    .single();
+
+
+    if(error){
+
+      await saveAttempt(
+        email,
+        ip,
+        false
+      );
+
+      await logSecurityEvent(
+        'REGISTER_FAILED',
+        null,
+        {
+          ip,
+          error
+        }
+      );
+
+      return NextResponse.json(
+        {
+          error:
+          'Failed creating user'
+        },
+        {
+          status:500
+        }
+      );
+
+    }
+
+
+    await saveAttempt(
+      email,
+      ip,
+      true
+    );
+
+
+    await logSecurityEvent(
+
+      'REGISTER_SUCCESS',
+
+      user.id,
+
+      {
+
+        ip,
+
+        userAgent
+
+      }
+
+    );
+
+
+    return NextResponse.json(
+      {user},
+      {status:201}
+    );
+
   }
+
+  catch(err){
+
+    console.error(
+      'Register error:',
+      err
+    );
+
+    return NextResponse.json(
+      {
+        error:
+        'Internal server error'
+      },
+      {
+        status:500
+      }
+    );
+
+  }
+
 }
