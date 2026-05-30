@@ -113,8 +113,10 @@ export function ForwardMessageModal({
       const keyForStorage = storageKey ?? pbkdf2(currentUserId, 'storage-salt', 1000, 32);
       const sharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, keyForStorage);
 
-      // Re-cifrar el texto con la key de la conversación destino
-      const e2eEncrypted = encryptMessageE2E(`[Reenviado] ${messageText}`, sharedKey);
+      // Re-cifrar el texto con la key de la conversación destino, con marcador
+      // invisible de reenvío (el receptor lo convierte en indicador visual).
+      const { addForwardMarker } = await import('@/lib/chat/forward');
+      const e2eEncrypted = encryptMessageE2E(addForwardMarker(messageText), sharedKey);
 
       const res = await fetch(`/api/conversations/${conv.id}/messages`, {
         method: 'POST',

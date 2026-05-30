@@ -1,8 +1,24 @@
 'use client';
 
+import { useThemeStore } from '@/stores/theme-store';
+import { Moon, Sun } from 'lucide-react';
+
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
+  const theme = useThemeStore((s) => s.theme);
+  const toggleTheme = useThemeStore((s) => s.toggleTheme);
+
   return (
     <div className="min-h-screen bg-[#f0f2f5] dark:bg-gray-950 flex items-center justify-center p-4">
+      {/* Botón de cambiar tema */}
+      <button
+        onClick={toggleTheme}
+        className="absolute top-4 right-4 p-2 rounded-full bg-white dark:bg-gray-800 border border-[#dddfe2] dark:border-gray-700 text-[#1c1e21] dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors shadow-sm"
+        title="Cambiar tema"
+        aria-label="Cambiar tema"
+      >
+        {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+      </button>
+
       <div className="w-full max-w-[396px]">
         {/* Logo and Title */}
         <div className="text-center mb-6">

@@ -17,6 +17,7 @@ export default function ProfilePage() {
   const token = useAuthStore(s => s.token);
   const user = useAuthStore(s => s.user);
   const setAuth = useAuthStore(s => s.setAuth);
+  const logout = useAuthStore(s => s.logout);
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -25,6 +26,34 @@ export default function ProfilePage() {
   const [newUsername, setNewUsername] = useState('');
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDeleteAccount = async () => {
+    if (!token) return;
+    const confirmed = window.confirm(
+      '¿Eliminar tu cuenta permanentemente? Perderás el acceso a todos tus mensajes y conversaciones. Esta acción no se puede deshacer.'
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    try {
+      const res = await fetch('/api/users/me', {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        logout();
+        router.push('/auth/login');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'No se pudo eliminar la cuenta.');
+        setDeleting(false);
+      }
+    } catch {
+      alert('Error de conexión.');
+      setDeleting(false);
+    }
+  };
 
   useEffect(() => {
     // Redirigir al login si no hay token (tras cargar)
@@ -210,8 +239,54 @@ export default function ProfilePage() {
           </div>
         </form>
 
+        {/* Acciones de seguridad */}
+        <div className="mt-8 border-t border-gray-150 dark:border-gray-850 pt-5 space-y-2">
+          <Link
+            href="/profile/change-password"
+            className="flex items-center justify-between w-full bg-[#f0f2f5] dark:bg-gray-800 hover:bg-[#e4e6eb] dark:hover:bg-gray-700 text-gray-900 dark:text-white rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+              Cambiar contraseña
+            </span>
+            <span className="text-gray-400">›</span>
+          </Link>
+
+          <Link
+            href="/settings"
+            className="flex items-center justify-between w-full bg-[#f0f2f5] dark:bg-gray-800 hover:bg-[#e4e6eb] dark:hover:bg-gray-700 text-gray-900 dark:text-white rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                <line x1="8" y1="21" x2="16" y2="21" />
+                <line x1="12" y1="17" x2="12" y2="21" />
+              </svg>
+              Dispositivos conectados
+            </span>
+            <span className="text-gray-400">›</span>
+          </Link>
+        </div>
+
+        {/* Zona de peligro — eliminar cuenta */}
+        <div className="mt-6 border-t border-red-200 dark:border-red-900/40 pt-5">
+          <button
+            onClick={handleDeleteAccount}
+            disabled={deleting}
+            className="flex items-center justify-center gap-2 w-full bg-red-50 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-950/50 text-red-600 dark:text-red-400 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+            {deleting ? 'Eliminando...' : 'Eliminar mi cuenta'}
+          </button>
+        </div>
+
         {/* Botón de volver */}
-        <div className="mt-8 border-t border-gray-150 dark:border-gray-850 pt-5 text-center">
+        <div className="mt-6 text-center">
           <Link
             href="/chat"
             className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white transition-colors"

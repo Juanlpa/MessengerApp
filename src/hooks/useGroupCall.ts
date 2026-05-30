@@ -9,7 +9,6 @@ export function useGroupCall(
   conversationId: string,
   userId: string,
   username: string,
-  sharedKey: Uint8Array | null,
   processStream?: (raw: MediaStream) => MediaStream
 ) {
   const [callState, setCallState] = useState<GroupCallState>('idle');
@@ -20,15 +19,26 @@ export function useGroupCall(
   const managerRef = useRef<MeshManager | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const rawStreamRef = useRef<MediaStream | null>(null);
-  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const isJoiningRef = useRef(false);
 
-  const joinCall = useCallback(async () => {
+  // Callback ref — sobrevive al lazy-load del GroupCallModal (sin esto el
+  // <video> local queda con srcObject=null si el modal monta después de joinCall).
+  const setLocalVideoEl = useCallback((el: HTMLVideoElement | null) => {
+    localVideoRef.current = el;
+    if (el && localStreamRef.current && el.srcObject !== localStreamRef.current) {
+      el.srcObject = localStreamRef.current;
+    }
+  }, []);
+
+  // Si se pasa providedStream, se reutiliza (evita el bug de Chrome de stop+getUserMedia
+  // inmediato que devuelve un track congelado al convertir 1-a-1 → grupal).
+  const joinCall = useCallback(async (providedStream?: MediaStream) => {
     if (isJoiningRef.current || managerRef.current) return; // guard double-join
     isJoiningRef.current = true;
     let stream: MediaStream | null = null;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      stream = providedStream ?? await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       rawStreamRef.current = stream;
       const processedStream = processStream ? processStream(stream) : stream;
       localStreamRef.current = processedStream;
@@ -39,7 +49,8 @@ export function useGroupCall(
       });
 
       managerRef.current = manager;
-      await manager.join(processedStream, sharedKey);
+      // La clave de grupo se deriva del conversationId dentro del MeshManager.
+      await manager.join(processedStream);
       setCallState('connected');
     } catch (err: unknown) {
       // Stop raw tracks so camera/mic LED turns off on any error
@@ -59,7 +70,7 @@ export function useGroupCall(
     } finally {
       isJoiningRef.current = false;
     }
-  }, [conversationId, userId, username, sharedKey]);
+  }, [conversationId, userId, username, processStream]);
 
   const leaveCall = useCallback(() => {
     managerRef.current?.leave();
@@ -93,6 +104,34 @@ export function useGroupCall(
     }
   }, []);
 
+  /**
+   * Re-procesa el video local con el filtro/fondo actual y lo reemplaza en
+   * todos los peers del mesh. Llamar después de cambiar filtro/fondo.
+   */
+  const refreshVideoProcessing = useCallback(() => {
+    const raw = rawStreamRef.current;
+    if (!raw || !managerRef.current) return;
+
+    const processed = processStream ? processStream(raw) : raw;
+    const newVideoTrack = processed.getVideoTracks()[0];
+    if (!newVideoTrack) return;
+
+    // Preservar estado de mute
+    const prev = localStreamRef.current?.getVideoTracks()[0];
+    if (prev && newVideoTrack !== prev) newVideoTrack.enabled = prev.enabled;
+
+    const audioTracks = localStreamRef.current?.getAudioTracks() ?? raw.getAudioTracks();
+    const merged = new MediaStream([newVideoTrack, ...audioTracks]);
+    localStreamRef.current = merged;
+
+    managerRef.current.replaceLocalVideoTrack(newVideoTrack);
+
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = merged;
+      localVideoRef.current.play().catch(() => {});
+    }
+  }, [processStream]);
+
   // Cleanup al desmontar el componente para liberar cámara/mic y canal Supabase
   useEffect(() => {
     return () => {
@@ -111,12 +150,13 @@ export function useGroupCall(
   return {
     callState,
     participants,
-    localVideoRef,
+    localVideoRef: setLocalVideoEl,
     isAudioMuted,
     isVideoMuted,
     joinCall,
     leaveCall,
     toggleAudio,
     toggleVideo,
+    refreshVideoProcessing,
   };
 }

@@ -1,111 +1,35 @@
-import {
-NextRequest,
-NextResponse
-} from 'next/server';
+/**
+ * POST /api/auth/revoke-other-sessions
+ *
+ * Cierra todas las sesiones activas del usuario excepto la del token actual.
+ * El userId se extrae del JWT verificado — NUNCA de headers controlables por el cliente.
+ */
 
-import {
-revokeOtherSessions
-} from '../../../../lib/auth/sessionManager';
+import { NextRequest, NextResponse } from 'next/server';
+import { revokeOtherSessions } from '@/lib/auth/sessionManager';
+import { logSecurityEvent } from '@/lib/auth/securityLogs';
+import { getUserFromRequestStrict, getTokenFromRequest } from '@/lib/auth/get-user';
+import { getClientIp, getUserAgent } from '@/lib/auth/request-info';
 
-import {
-logSecurityEvent
-} from '../../../../lib/auth/securityLogs';
+export async function POST(request: NextRequest) {
+  const ip = getClientIp(request);
+  const userAgent = getUserAgent(request);
 
+  try {
+    const user = await getUserFromRequestStrict(request);
+    const token = getTokenFromRequest(request);
 
-export async function POST(
-request:NextRequest
-){
+    if (!user || !token) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
-try{
+    // userId viene del JWT verificado, NO de un header arbitrario (evita IDOR)
+    await revokeOtherSessions(user.sub, token);
+    await logSecurityEvent('OTHER_SESSIONS_REVOKED', user.sub, { ip, userAgent });
 
-const token=
-request.headers.get(
-'authorization'
-)?.replace(
-'Bearer ',
-''
-);
-
-
-if(!token){
-
-return NextResponse.json(
-{
-error:
-'Unauthorized'
-},
-{
-status:401
-}
-);
-
-}
-
-
-const userId=
-request.headers.get(
-'x-user-id'
-);
-
-
-if(!userId){
-
-return NextResponse.json(
-{
-error:
-'User not found'
-},
-{
-status:401
-}
-);
-
-}
-
-
-await revokeOtherSessions(
-
-userId,
-
-token
-
-);
-
-
-await logSecurityEvent(
-
-'OTHER_SESSIONS_REVOKED',
-
-userId,
-
-{}
-
-);
-
-
-return NextResponse.json({
-
-success:true
-
-});
-
-}
-catch(error){
-
-console.error(
-error
-);
-
-return NextResponse.json(
-{
-error:
-'Internal error'
-},
-{
-status:500
-}
-);
-
-}
-
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error('Revoke sessions error:', err instanceof Error ? err.message : 'unknown');
+    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
+  }
 }

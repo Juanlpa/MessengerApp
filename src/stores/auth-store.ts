@@ -50,7 +50,18 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
+    // Revocar el token en el servidor (best-effort, no bloquea el logout local).
     if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('auth_token');
+      if (token) {
+        // fetch sin await — el logout local ocurre de inmediato; la revocación
+        // viaja en background. keepalive permite que complete aunque se navegue.
+        fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          keepalive: true,
+        }).catch(() => {});
+      }
       localStorage.removeItem('auth_token');
       localStorage.removeItem('auth_user');
     }

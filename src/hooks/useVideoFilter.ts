@@ -12,6 +12,7 @@ export function useVideoFilter() {
 
   // Internal pipeline state — not React state to avoid extra re-renders
   const rafIdRef = useRef<number | null>(null);
+  const fallbackIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hiddenVideoRef = useRef<HTMLVideoElement | null>(null);
   const activeFilterRef = useRef<FilterId>('none');
@@ -31,6 +32,10 @@ export function useVideoFilter() {
     if (rafIdRef.current !== null) {
       cancelAnimationFrame(rafIdRef.current);
       rafIdRef.current = null;
+    }
+    if (fallbackIntervalRef.current !== null) {
+      clearInterval(fallbackIntervalRef.current);
+      fallbackIntervalRef.current = null;
     }
     if (hiddenVideoRef.current) {
       hiddenVideoRef.current.pause();
@@ -54,55 +59,86 @@ export function useVideoFilter() {
     const videoTracks = raw.getVideoTracks();
     if (videoTracks.length === 0) return raw;
 
+    // CRÍTICO: si no hay filtro ni fondo activo, NO usar el canvas pipeline.
+    // El canvas depende de requestAnimationFrame, que se PAUSA cuando la ventana
+    // no está enfocada → el canvas no se dibuja → el track emite frames negros
+    // y se transmite video/“nada” al otro lado. Pasar el stream crudo directo
+    // (idéntico al flujo de audio, que sí funciona) y solo procesar cuando el
+    // usuario activa explícitamente un filtro.
+    if (activeFilterRef.current === 'none' && activeBackgroundRef.current === 'none') {
+      stopPipeline(); // detener cualquier pipeline anterior (al quitar el filtro)
+      return raw;
+    }
+
     // Clean up any previous pipeline before creating a new one
     stopPipeline();
 
     const canvas = document.createElement('canvas');
-    // alpha:false — compositor skips alpha blending → ~10-15% faster on low-end GPUs
     const ctx = canvas.getContext('2d', { alpha: false })!;
 
-    // Set initial dimensions from track settings — available synchronously, no need to wait
-    // for loadedmetadata. This ensures the canvas track is ready for WebRTC addTrack() calls
-    // that happen immediately after processStream() returns.
     const settings = videoTracks[0].getSettings();
     canvas.width = settings.width || 1280;
     canvas.height = settings.height || 720;
     canvasRef.current = canvas;
 
-    // Capture canvas stream BEFORE loadedmetadata so the track is in processedStream
-    // when the caller does localStream.getTracks().forEach(t => pc.addTrack(t, ...))
     const captureStream = canvas.captureStream(30);
     const canvasVideoTrack = captureStream.getVideoTracks()[0];
-
-    // Build processedStream synchronously with all tracks (canvas video + raw audio)
     const processedStream = new MediaStream([canvasVideoTrack, ...raw.getAudioTracks()]);
 
     const hiddenVideo = document.createElement('video');
     hiddenVideo.muted = true;
     hiddenVideo.playsInline = true;
-    hiddenVideo.srcObject = new MediaStream(videoTracks);
+    // CLON del track de cámara — stopPipeline() hace track.stop() sobre el
+    // srcObject del hiddenVideo. Si usáramos el track original, apagaríamos
+    // la cámara raw (rompiendo replaceTrack al quitar el filtro). El clon
+    // se detiene de forma independiente.
+    hiddenVideo.srcObject = new MediaStream(videoTracks.map((t) => t.clone()));
     hiddenVideoRef.current = hiddenVideo;
 
-    const startLoop = () => {
-      // Refine canvas dimensions from actual decoded video (more accurate than getSettings())
+    const drawFrame = () => {
       const w = hiddenVideo.videoWidth;
       const h = hiddenVideo.videoHeight;
       if (w > 0 && h > 0) {
-        canvas.width = w;
-        canvas.height = h;
+        if (canvas.width !== w) canvas.width = w;
+        if (canvas.height !== h) canvas.height = h;
+        applyColorFilter(
+          ctx,
+          hiddenVideo,
+          activeFilterRef.current,
+          canvas.width,
+          canvas.height,
+          activeBackgroundRef.current === 'blur'
+        );
       }
-
-      const loop = () => {
-        if (!hiddenVideoRef.current || hiddenVideo.paused || hiddenVideo.ended) return;
-        // Use canvas.width/height directly so any dimension update in startLoop is reflected
-        applyColorFilter(ctx, hiddenVideo, activeFilterRef.current, canvas.width, canvas.height, activeBackgroundRef.current === 'blur');
-        rafIdRef.current = requestAnimationFrame(loop);
-      };
-      rafIdRef.current = requestAnimationFrame(loop);
     };
 
-    hiddenVideo.addEventListener('loadedmetadata', startLoop, { once: true });
-    hiddenVideo.play().catch(() => {});
+    // Loop por rAF (suave cuando la ventana está enfocada)
+    const rafLoop = () => {
+      if (!hiddenVideoRef.current) return;
+      drawFrame();
+      rafIdRef.current = requestAnimationFrame(rafLoop);
+    };
+
+    // Fallback por setInterval — rAF se pausa en ventanas sin foco; el interval
+    // sigue corriendo (a ~15fps) y mantiene el canvas con frames reales, evitando
+    // que el track transmita negro cuando la pestaña no está al frente.
+    fallbackIntervalRef.current = setInterval(drawFrame, 66);
+
+    hiddenVideo.addEventListener('loadedmetadata', () => {
+      drawFrame(); // primer frame inmediato
+      rafIdRef.current = requestAnimationFrame(rafLoop);
+    }, { once: true });
+
+    // Algunos navegadores no disparan loadedmetadata si el <video> no está en
+    // el DOM; arrancamos el loop igual tras play()
+    hiddenVideo.play()
+      .then(() => {
+        drawFrame();
+        if (rafIdRef.current === null) rafIdRef.current = requestAnimationFrame(rafLoop);
+      })
+      .catch(() => {
+        // Aunque play() falle, el interval sigue dibujando los frames disponibles
+      });
 
     return processedStream;
   }, [stopPipeline]);

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Shield, ShieldAlert, UserPlus, X, Search, Sparkles } from 'lucide-react';
 import { CallState } from '@/hooks/useWebRTC';
 import { VideoFilterPanel } from '@/components/calls/VideoFilterPanel';
@@ -13,8 +13,11 @@ interface Contact {
 interface CallModalProps {
   callState: CallState;
   otherUsername: string;
-  localVideoRef: React.RefObject<HTMLVideoElement | null>;
-  remoteVideoRef: React.RefObject<HTMLVideoElement | null>;
+  // Callback refs — React los invoca con el HTMLVideoElement al montar.
+  // Esencial para sobrevivir al lazy-load del modal (un RefObject normal
+  // sería null cuando el hook intenta asignar el srcObject).
+  localVideoRef: (el: HTMLVideoElement | null) => void;
+  remoteVideoRef: (el: HTMLVideoElement | null) => void;
   onAccept: () => void;
   onReject: () => void;
   onEndCall: () => void;

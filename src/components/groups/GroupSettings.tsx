@@ -1,25 +1,32 @@
 'use client';
 
 import { useState } from 'react';
-import { useUpdateGroup, type GroupDetail } from '@/hooks/useGroups';
+import { useUpdateGroup, useDeleteGroup, useRemoveMember, type GroupDetail } from '@/hooks/useGroups';
 import { GroupAvatar } from './GroupAvatar';
 import { GroupMembersList } from './GroupMembersList';
 import { AddMembersModal } from './AddMembersModal';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { useAuthStore } from '@/stores/auth-store';
 
 interface GroupSettingsProps {
   group: GroupDetail;
   onClose: () => void;
   onUpdated: () => void;
+  /** Se llama cuando el usuario sale o elimina el grupo (para navegar fuera) */
+  onLeftGroup?: () => void;
 }
 
-export function GroupSettings({ group, onClose, onUpdated }: GroupSettingsProps) {
+export function GroupSettings({ group, onClose, onUpdated, onLeftGroup }: GroupSettingsProps) {
   const user = useAuthStore(s => s.user);
   const { updateGroup, loading, error } = useUpdateGroup();
+  const { deleteGroup, loading: deleting } = useDeleteGroup();
+  const { removeMember, loading: leaving } = useRemoveMember();
   const [name, setName] = useState(group.name);
   const [description, setDescription] = useState(group.description ?? '');
   const [showAddMembers, setShowAddMembers] = useState(false);
   const [editing, setEditing] = useState(false);
+  // Confirmación con modal acorde al UI (en vez de window.confirm nativo)
+  const [confirmAction, setConfirmAction] = useState<'leave' | 'delete' | null>(null);
 
   const currentMember = group.members.find((m) => m.user_id === user?.id);
   const isAdmin = currentMember?.role === 'admin';
@@ -27,6 +34,17 @@ export function GroupSettings({ group, onClose, onUpdated }: GroupSettingsProps)
   async function handleSave() {
     const ok = await updateGroup(group.id, { name, description });
     if (ok) { setEditing(false); onUpdated(); }
+  }
+
+  async function confirmLeave() {
+    if (!user?.id) return;
+    const ok = await removeMember(group.id, user.id);
+    if (ok) { setConfirmAction(null); onClose(); onLeftGroup?.(); }
+  }
+
+  async function confirmDelete() {
+    const ok = await deleteGroup(group.id);
+    if (ok) { setConfirmAction(null); onClose(); onLeftGroup?.(); }
   }
 
   return (
@@ -123,6 +141,26 @@ export function GroupSettings({ group, onClose, onUpdated }: GroupSettingsProps)
               onChanged={onUpdated}
             />
           </div>
+
+          {/* Acciones: salir / eliminar */}
+          <div className="pt-2 border-t border-white/10 space-y-2">
+            <button
+              onClick={() => setConfirmAction('leave')}
+              disabled={leaving}
+              className="w-full py-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-red-400 text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              {leaving ? 'Saliendo...' : 'Salir del grupo'}
+            </button>
+            {isAdmin && (
+              <button
+                onClick={() => setConfirmAction('delete')}
+                disabled={deleting}
+                className="w-full py-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                {deleting ? 'Eliminando...' : 'Eliminar grupo'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -132,6 +170,28 @@ export function GroupSettings({ group, onClose, onUpdated }: GroupSettingsProps)
         open={showAddMembers}
         onClose={() => setShowAddMembers(false)}
         onAdded={onUpdated}
+      />
+
+      {/* Confirmación de salir/eliminar — modal acorde al UI */}
+      <ConfirmDialog
+        open={confirmAction === 'leave'}
+        title="Salir del grupo"
+        message="¿Seguro que quieres salir? Dejarás de recibir los mensajes de este grupo."
+        confirmLabel="Salir"
+        danger
+        loading={leaving}
+        onConfirm={confirmLeave}
+        onCancel={() => setConfirmAction(null)}
+      />
+      <ConfirmDialog
+        open={confirmAction === 'delete'}
+        title="Eliminar grupo"
+        message="Esto eliminará el grupo y todos sus mensajes para todos los miembros. Esta acción no se puede deshacer."
+        confirmLabel="Eliminar"
+        danger
+        loading={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setConfirmAction(null)}
       />
     </div>
   );

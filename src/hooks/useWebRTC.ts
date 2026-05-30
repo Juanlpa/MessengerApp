@@ -8,6 +8,7 @@ import {
 } from '@/lib/webrtc/insertable-streams';
 import { deriveHourlyKey } from '@/lib/webrtc/frame-crypto';
 import { startRingtone, stopRingtone as stopRingtoneFn } from '@/lib/audio/ringtone';
+import { useCallStore } from '@/stores/call-store';
 
 export type CallState =
   | 'idle'
@@ -21,7 +22,7 @@ export type CallState =
   | 'failed';
 
 interface SignalPayload {
-  type: 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'reject' | 'upgrade-to-group';
+  type: 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'reject' | 'upgrade-to-group' | 'call-request';
   senderId: string;
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
@@ -82,12 +83,36 @@ export function useWebRTC(
   const isAudioOnlyRef = useRef(false);
   const callStateRef = useRef<CallState>('idle');
 
-  const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  // Refs internos para el código del hook (acceso síncrono al element)
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Callback refs que se pasan al CallModal. Cuando React monta el <video>
+  // (CallModal es lazy-loaded — el ref no existe en el momento de setupLocalMedia),
+  // este callback dispara la asignación de srcObject inmediatamente.
+  // Sin esto: el <video> se monta con srcObject=null y se queda en negro.
+  const setLocalVideoEl = useCallback((el: HTMLVideoElement | null) => {
+    localVideoRef.current = el;
+    if (el && localStream.current && el.srcObject !== localStream.current) {
+      el.srcObject = localStream.current;
+      el.play().catch(() => {});
+    }
+  }, []);
+
+  const setRemoteVideoEl = useCallback((el: HTMLVideoElement | null) => {
+    remoteVideoRef.current = el;
+    if (el && remoteStream.current && el.srcObject !== remoteStream.current) {
+      el.srcObject = remoteStream.current;
+      // play() explícito — autoPlay con audio puede bloquearse sin user gesture
+      el.play().catch(() => {});
+    }
+  }, []);
 
   const peerConnection = useRef<RTCPeerConnection | null>(null);
   const localStream = useRef<MediaStream | null>(null);
   const remoteStream = useRef<MediaStream | null>(null);
+  // Sender del track de video — para replaceTrack al activar/desactivar filtros en vivo
+  const videoSenderRef = useRef<RTCRtpSender | null>(null);
   const channel = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const callIdRef = useRef<string | null>(null);
   const callStartTimeRef = useRef<number | null>(null);
@@ -107,6 +132,11 @@ export function useWebRTC(
   const missedTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   // Use a ref so ICE handlers and effects can always call the latest cleanup
   const cleanupRef = useRef<((status?: string, durationSecs?: number) => Promise<void>) | null>(null);
+  // Última oferta enviada por el llamante — para reenviarla si el receptor la
+  // pide (aceptó desde el banner sin haber estado suscrito al canal).
+  const lastOfferRef = useRef<RTCSessionDescriptionInit | null>(null);
+  // Ref a acceptCall para poder auto-aceptar desde el handler de signals.
+  const acceptCallRef = useRef<(() => Promise<void>) | null>(null);
 
   const isE2EMedia = isInsertableStreamsSupported();
 
@@ -162,6 +192,21 @@ export function useWebRTC(
     return key;
   }, []);
 
+  /**
+   * Lookup SÍNCRONO de la clave horaria — usar SOLO en handlers críticos
+   * (pc.ontrack) donde un microtask `await` cede el event loop y deja pasar
+   * frames cifrados al decoder, congelando el codec de video.
+   * Devuelve null si la clave aún no está derivada; en ese caso, el caller
+   * debe usar el flujo async normal o saltar el cifrado.
+   */
+  const getHourlyKeySync = useCallback((): CryptoKey | null => {
+    const hourIndex = Math.floor(Date.now() / 3_600_000);
+    if (hourlyKeyCacheRef.current?.hourIndex === hourIndex) {
+      return hourlyKeyCacheRef.current.key;
+    }
+    return null;
+  }, []);
+
   const startKeyRotation = useCallback(() => {
     if (keyRotationIntervalRef.current) clearInterval(keyRotationIntervalRef.current);
     keyRotationIntervalRef.current = setInterval(async () => {
@@ -188,6 +233,21 @@ export function useWebRTC(
         const signal = payload as SignalPayload;
         if (signal.senderId === currentUserId) return;
 
+        if (signal.type === 'call-request') {
+          // El receptor (que aceptó desde el banner) pide la oferta de nuevo
+          // porque no estaba suscrito cuando se envió. Reenviarla si seguimos
+          // llamando.
+          if (callStateRef.current === 'calling' && lastOfferRef.current) {
+            sendSignal({
+              type: 'offer',
+              sdp: lastOfferRef.current,
+              audioOnly: isAudioOnlyRef.current,
+              callId: callIdRef.current ?? undefined,
+            });
+          }
+          return;
+        }
+
         if (signal.type === 'offer') {
           stopRingtone();
           isAudioOnlyRef.current = signal.audioOnly ?? false;
@@ -204,6 +264,13 @@ export function useWebRTC(
             await peerConnection.current.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
           }
           pendingCandidatesRef.current = [];
+
+          // Si aceptamos esta llamada desde el banner, aceptar automáticamente
+          const autoAcceptId = useCallStore.getState().pendingAcceptCall;
+          if (autoAcceptId === conversationId) {
+            useCallStore.getState().setPendingAcceptCall(null);
+            await acceptCallRef.current?.();
+          }
         } else if (signal.type === 'answer') {
           if (peerConnection.current) {
             await peerConnection.current.setRemoteDescription(
@@ -248,7 +315,14 @@ export function useWebRTC(
           }
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        // Si entramos al chat tras aceptar una llamada desde el banner, pedir
+        // al llamante que reenvíe la oferta (la original se perdió porque no
+        // estábamos suscritos a este canal).
+        if (status === 'SUBSCRIBED' && useCallStore.getState().pendingAcceptCall === conversationId) {
+          sendSignal({ type: 'call-request' });
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel.current!);
@@ -319,16 +393,28 @@ export function useWebRTC(
       }
     };
 
-    pc.ontrack = async (event) => {
+    // pc.ontrack es síncrono — configurar el receiver transform ANTES del
+    // primer frame para no congelar el decoder. La clave debe estar pre-derivada
+    // por initiateCall/acceptCall (getHourlyKey llamado antes del SDP exchange).
+    pc.ontrack = (event) => {
       if (sharedKeyRef.current && isInsertableStreamsSupported()) {
-        try {
-          const hourKey = await getHourlyKey(sharedKeyRef.current);
-          // Guard: abort if this PC was replaced by cleanup or a new call
-          if (peerConnection.current !== pc) return;
-          const container = await setupReceiverTransform(event.receiver, hourKey);
-          if (peerConnection.current !== pc) return;
-          keyContainersRef.current.push(container);
-        } catch {}
+        const hourKey = getHourlyKeySync();
+        if (hourKey) {
+          try {
+            const container = setupReceiverTransform(event.receiver, hourKey);
+            keyContainersRef.current.push(container);
+          } catch {}
+        } else {
+          // Fallback raro — la clave debió estar lista. Lo intentamos async
+          // pero los frames iniciales pasarán cifrados (codec puede congelarse).
+          getHourlyKey(sharedKeyRef.current)
+            .then((key) => {
+              if (peerConnection.current !== pc) return;
+              const container = setupReceiverTransform(event.receiver, key);
+              keyContainersRef.current.push(container);
+            })
+            .catch(() => {});
+        }
       }
 
       if (event.streams?.[0]) {
@@ -339,27 +425,40 @@ export function useWebRTC(
       }
       if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== remoteStream.current) {
         remoteVideoRef.current.srcObject = remoteStream.current;
+        remoteVideoRef.current.play().catch(() => {});
       }
     };
 
+    // addTrack también necesita configurar el sender transform síncrono
+    // antes de que se envíe el primer frame
     if (localStream.current) {
-      localStream.current.getTracks().forEach(async (track) => {
-        const sender = pc.addTrack(track, localStream.current!);
+      const tracks = localStream.current.getTracks();
+      for (const track of tracks) {
+        const sender = pc.addTrack(track, localStream.current);
+        // Guardar el sender de video para poder hacer replaceTrack al cambiar filtros
+        if (track.kind === 'video') videoSenderRef.current = sender;
         if (sharedKeyRef.current && isInsertableStreamsSupported()) {
-          try {
-            const hourKey = await getHourlyKey(sharedKeyRef.current);
-            // Guard: abort if this PC was replaced by cleanup or a new call
-            if (peerConnection.current !== pc) return;
-            const container = await setupSenderTransform(sender, hourKey);
-            if (peerConnection.current !== pc) return;
-            keyContainersRef.current.push(container);
-          } catch {}
+          const hourKey = getHourlyKeySync();
+          if (hourKey) {
+            try {
+              const container = setupSenderTransform(sender, hourKey);
+              keyContainersRef.current.push(container);
+            } catch {}
+          } else {
+            getHourlyKey(sharedKeyRef.current)
+              .then((key) => {
+                if (peerConnection.current !== pc) return;
+                const container = setupSenderTransform(sender, key);
+                keyContainersRef.current.push(container);
+              })
+              .catch(() => {});
+          }
         }
-      });
+      }
     }
 
     return pc;
-  }, [sendSignal, setCallStateSafe]);
+  }, [sendSignal, setCallStateSafe, getHourlyKey, getHourlyKeySync]);
 
   const setupLocalMedia = async (audioOnly = false) => {
     try {
@@ -400,6 +499,7 @@ export function useWebRTC(
 
     const offer = await peerConnection.current.createOffer();
     await peerConnection.current.setLocalDescription(offer);
+    lastOfferRef.current = offer; // guardar para reenviar si el receptor la pide
 
     // Create call record first to get callId, then include it in the offer
     await saveCallRecord('initiated');
@@ -440,19 +540,19 @@ export function useWebRTC(
     }
 
     const currentPc = peerConnection.current;
-    // Use Promise.all so all transforms are set up BEFORE creating the answer SDP
-    await Promise.all(localStream.current!.getTracks().map(async (track) => {
+    // Clave horaria YA derivada (await arriba); usar lookup síncrono para
+    // configurar el sender transform ANTES de crear la SDP answer.
+    const hourKey = getHourlyKeySync();
+    for (const track of localStream.current!.getTracks()) {
       const sender = currentPc!.addTrack(track, localStream.current!);
-      if (sharedKeyRef.current && isInsertableStreamsSupported()) {
+      if (track.kind === 'video') videoSenderRef.current = sender;
+      if (sharedKeyRef.current && isInsertableStreamsSupported() && hourKey) {
         try {
-          const hourKey = await getHourlyKey(sharedKeyRef.current);
-          if (peerConnection.current !== currentPc) return;
-          const container = await setupSenderTransform(sender, hourKey);
-          if (peerConnection.current !== currentPc) return;
+          const container = setupSenderTransform(sender, hourKey);
           keyContainersRef.current.push(container);
         } catch {}
       }
-    }));
+    }
 
     const answer = await peerConnection.current.createAnswer();
     await peerConnection.current.setLocalDescription(answer);
@@ -463,6 +563,9 @@ export function useWebRTC(
     await joinCallRecord();
     startKeyRotation();
   };
+
+  // Mantener el ref actualizado para que el handler de signals pueda auto-aceptar
+  acceptCallRef.current = acceptCall;
 
   const rejectCall = useCallback(() => {
     sendSignal({ type: 'reject' });
@@ -500,13 +603,29 @@ export function useWebRTC(
 
   /**
    * Cierra la llamada 1-a-1 sin enviar 'hangup' al peer (usar después de upgrade-to-group).
-   * Útil para transicionar a llamada grupal sin que el otro lado vea "llamada terminada".
+   * Devuelve un CLON del stream crudo de la cámara para reutilizarlo en la llamada
+   * grupal — evita el patrón stop+getUserMedia inmediato (Chrome devuelve un track
+   * congelado). El clon sobrevive al cleanup que detiene el stream original.
    */
-  const endOneToOneCall = useCallback(async () => {
+  const endOneToOneCall = useCallback(async (): Promise<MediaStream | null> => {
+    // Clonar la cámara cruda ANTES del cleanup; los clones son independientes
+    // y siguen vivos aunque se detengan los tracks originales.
+    let clonedStream: MediaStream | null = null;
+    const raw = rawStreamRef.current;
+    if (raw && !isAudioOnlyRef.current) {
+      try {
+        clonedStream = new MediaStream(raw.getTracks().map((t) => t.clone()));
+      } catch {
+        clonedStream = null;
+      }
+    }
+
     const duration = callStartTimeRef.current
       ? Math.round((Date.now() - callStartTimeRef.current) / 1000)
       : undefined;
     await cleanupRef.current?.(undefined, duration);
+
+    return clonedStream;
   }, []);
 
   const endCall = useCallback(() => {
@@ -532,6 +651,7 @@ export function useWebRTC(
 
     peerConnection.current?.close();
     peerConnection.current = null;
+    videoSenderRef.current = null;
     localStream.current?.getTracks().forEach((t) => t.stop());
     localStream.current = null;
     rawStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -590,10 +710,53 @@ export function useWebRTC(
 
   const forceIdle = useCallback(() => setCallStateSafe('idle'), [setCallStateSafe]);
 
+  /**
+   * Re-procesa el video local con el filtro/fondo actual y reemplaza el track
+   * en el sender vía replaceTrack(). Llamar después de cambiar filtro/fondo.
+   *
+   * El sender transform (Insertable Streams) se mantiene — está atado al sender,
+   * no al track, así que replaceTrack conserva el cifrado E2E.
+   */
+  const refreshVideoProcessing = useCallback(() => {
+    const raw = rawStreamRef.current;
+    if (!raw || !videoSenderRef.current) return;
+    if (isAudioOnlyRef.current) return; // sin video en llamadas de voz
+
+    // Re-procesar el stream crudo con el filtro actual.
+    // processStream devuelve el raw si no hay filtro, o un stream con canvas si lo hay.
+    const processed = processStream ? processStream(raw) : raw;
+    const newVideoTrack = processed.getVideoTracks()[0];
+    if (!newVideoTrack) return;
+
+    // Preservar el estado de mute al cambiar de track
+    const prevVideoTrack = localStream.current?.getVideoTracks()[0];
+    if (prevVideoTrack && newVideoTrack !== prevVideoTrack) {
+      newVideoTrack.enabled = prevVideoTrack.enabled;
+    }
+
+    // Reconstruir localStream con el nuevo video track + el audio existente
+    const audioTracks = localStream.current?.getAudioTracks() ?? raw.getAudioTracks();
+    const merged = new MediaStream([newVideoTrack, ...audioTracks]);
+    localStream.current = merged;
+
+    // Reemplazar el track en el sender (mantiene el transform de cifrado)
+    videoSenderRef.current.replaceTrack(newVideoTrack).catch(() => {});
+
+    // Actualizar la vista previa local
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = merged;
+      localVideoRef.current.play().catch(() => {});
+    }
+  }, [processStream]);
+
   return {
     callState,
-    localVideoRef,
-    remoteVideoRef,
+    refreshVideoProcessing,
+    // Devolvemos los callback refs para que CallModal/GroupCallModal usen.
+    // Cuando React monta el <video>, el callback se invoca y el srcObject
+    // se asigna inmediatamente — sobrevive al lazy-load de CallModal.
+    localVideoRef: setLocalVideoEl,
+    remoteVideoRef: setRemoteVideoEl,
     initiateCall,
     acceptCall,
     rejectCall,

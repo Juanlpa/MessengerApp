@@ -102,7 +102,7 @@ return(
 <div>
 
 <h2
-className="text-[20px] leading-6 font-semibold text-[#1c1e21] mb-5 text-center"
+className="text-[20px] leading-6 font-semibold text-[#1c1e21] dark:text-white mb-5 text-center"
 >
 
 Iniciar sesión
@@ -132,7 +132,7 @@ required
 placeholder=
 "Correo electrónico"
 
-className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2] text-[#1c1e21] placeholder-[#90949c] focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
+className="w-full px-4 py-[14px] rounded-[6px] bg-white dark:bg-gray-800 border border-[#dddfe2] dark:border-gray-700 text-[#1c1e21] dark:text-white placeholder-[#90949c] dark:placeholder-gray-400 focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
 
 />
 
@@ -154,7 +154,7 @@ required
 placeholder=
 "Contraseña"
 
-className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2] text-[#1c1e21] placeholder-[#90949c] focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
+className="w-full px-4 py-[14px] rounded-[6px] bg-white dark:bg-gray-800 border border-[#dddfe2] dark:border-gray-700 text-[#1c1e21] dark:text-white placeholder-[#90949c] dark:placeholder-gray-400 focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
 
 />
 
@@ -231,6 +231,16 @@ loading
 }
 
 </button>
+
+{/* Enlace permanente de recuperación de contraseña */}
+<div className="text-center mt-3">
+<Link
+href="/auth/forgot-password"
+className="text-[#1877f2] dark:text-blue-400 hover:underline text-sm"
+>
+¿Olvidaste tu contraseña?
+</Link>
+</div>
 
 </form>
 

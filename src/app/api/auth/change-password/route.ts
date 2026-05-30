@@ -1,197 +1,91 @@
-import crypto from 'crypto';
+/**
+ * PATCH /api/auth/change-password
+ *
+ * Recibe del cliente: { currentPasswordHash, newPasswordHash, newSalt }
+ *   - El cliente derivó los hashes localmente con PBKDF2 + SHA256.
+ *   - La contraseña NUNCA viaja al servidor.
+ *
+ * Aplica: verificación de JWT + blacklist, comparación constant-time,
+ * revocación de todas las sesiones tras el cambio.
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
-import jwt from 'jsonwebtoken';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
+import { constantTimeEqual, fromHex } from '@/lib/crypto/utils';
+import { getUserFromRequestStrict } from '@/lib/auth/get-user';
+import { logSecurityEvent } from '@/lib/auth/securityLogs';
+import { revokeAllSessions } from '@/lib/auth/sessionManager';
+import { getClientIp, getUserAgent } from '@/lib/auth/request-info';
 
 export async function PATCH(request: NextRequest) {
+  const ip = getClientIp(request);
+  const userAgent = getUserAgent(request);
 
   try {
+    const tokenUser = await getUserFromRequestStrict(request);
+    if (!tokenUser) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
-    const authHeader =
-      request.headers.get('authorization');
+    const body = await request.json();
+    const { currentPasswordHash, newPasswordHash, newSalt } = body;
 
-    if (!authHeader) {
+    if (!currentPasswordHash || !newPasswordHash || !newSalt) {
+      return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
+    }
+
+    // Validar formato hex (32 bytes hash = 64 hex chars; 16 bytes salt = 32 hex chars)
+    if (
+      !/^[0-9a-f]{64}$/i.test(currentPasswordHash) ||
+      !/^[0-9a-f]{64}$/i.test(newPasswordHash) ||
+      !/^[0-9a-f]{32}$/i.test(newSalt)
+    ) {
+      return NextResponse.json({ error: 'Invalid format' }, { status: 400 });
+    }
+
+    const supabase = getSupabaseAdmin();
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, password_hash, salt')
+      .eq('id', tokenUser.sub)
+      .single();
+
+    if (!user) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    // Comparar contraseña actual en tiempo constante
+    const storedHash = fromHex(user.password_hash);
+    const providedHash = fromHex(currentPasswordHash);
+    const valid = constantTimeEqual(storedHash, providedHash);
+
+    if (!valid) {
+      await logSecurityEvent('CHANGE_PASSWORD_FAILED', user.id, { ip, userAgent });
       return NextResponse.json(
-        { error:'Unauthorized' },
-        { status:401 }
+        { error: 'Contraseña actual incorrecta' },
+        { status: 401 }
       );
     }
 
-    const token =
-      authHeader.replace(
-        'Bearer ',
-        ''
-      );
+    // Actualizar password_hash y salt con los valores nuevos
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ salt: newSalt, password_hash: newPasswordHash })
+      .eq('id', user.id);
 
-    const decoded:any =
-      jwt.verify(
-        token,
-        process.env.JWT_SECRET!
-      );
-      console.log("JWT:", decoded);
-
-    const body =
-      await request.json();
-
-    const {
-      currentPassword,
-      newPassword
-    } = body;
-
-    if(
-      !currentPassword ||
-      !newPassword
-    ){
-
-      return NextResponse.json(
-      {
-        error:'Missing fields'
-      },
-      {
-        status:400
-      });
-
+    if (updateError) {
+      return NextResponse.json({ error: 'Failed to update password' }, { status: 500 });
     }
 
-    const supabase =
-      getSupabaseAdmin();
-
-    const {
- data:user
-}=
-await supabase
-.from('users')
-.select(`
- id,
- password_hash,
- salt
-`)
-.eq(
- 'id',
- decoded.sub
-)
-.single();
-
-
-    if(!user){
-
-      return NextResponse.json(
-      {
-        error:'User not found'
-      },
-      {
-        status:404
-      });
-
-    }
-
-
-    // recrear hash actual
-
-    const currentHash = crypto
-.createHash('sha256')
-.update(
-
-crypto
-.pbkdf2Sync(
-currentPassword,
-Buffer.from(user.salt,'hex'),
-100000,
-32,
-'sha256'
-)
-
-)
-.digest('hex');
-
-
-console.log(
-"GENERADO:",
-currentHash
-);
-
-console.log(
-"DB:",
-user.password_hash
-);
-
-
-if(
-currentHash !== user.password_hash
-){
-
-      return NextResponse.json(
-      {
-      error:'Contraseña actual incorrecta'
-      },
-      {
-      status:401
-      });
-
-    }
-
-
-    // nuevo salt
-
-    const newSalt =
-      crypto
-      .randomBytes(16)
-      .toString('hex');
-
-
-    const newHash = crypto
-.createHash('sha256')
-.update(
-
-crypto
-.pbkdf2Sync(
-newPassword,
-Buffer.from(newSalt,'hex'),
-100000,
-32,
-'sha256'
-)
-
-)
-.digest('hex');
-
-
-    await supabase
-    .from('users')
-    .update({
-
-      salt:newSalt,
-
-      password_hash:newHash
-
-    })
-    .eq(
-      'id',
-      user.id
-    );
-
+    // Invalidar TODAS las sesiones del usuario (forzar re-login)
+    await revokeAllSessions(user.id);
+    await logSecurityEvent('CHANGE_PASSWORD_SUCCESS', user.id, { ip, userAgent });
 
     return NextResponse.json({
-
-      message:
-      'Contraseña actualizada correctamente'
-
+      message: 'Contraseña actualizada correctamente. Por favor, inicia sesión de nuevo.',
     });
-
+  } catch (err) {
+    console.error('Change password error:', err instanceof Error ? err.message : 'unknown');
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
-
-  catch(err){
-
-    console.log(err);
-
-    return NextResponse.json(
-    {
-      error:'Server error'
-    },
-    {
-      status:500
-    });
-
-  }
-
 }

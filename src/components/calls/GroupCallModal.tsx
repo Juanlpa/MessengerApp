@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useCallback, useState } from 'react';
 import { MeshParticipant } from '@/lib/webrtc/mesh-manager';
 import { VideoFilterPanel } from '@/components/calls/VideoFilterPanel';
 import { type FilterId } from '@/lib/filters/canvas-filters';
@@ -10,7 +10,8 @@ interface Props {
   isOpen: boolean;
   groupName: string;
   participants: Map<string, MeshParticipant>;
-  localVideoRef: React.RefObject<HTMLVideoElement | null>;
+  // Callback ref — necesario porque GroupCallModal es lazy-loaded
+  localVideoRef: (el: HTMLVideoElement | null) => void;
   isAudioMuted: boolean;
   isVideoMuted: boolean;
   onToggleAudio: () => void;
@@ -29,11 +30,13 @@ const ParticipantTile = memo(function ParticipantTile({
   participant: MeshParticipant;
   isLocal?: boolean;
 }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    if (videoRef.current && participant.stream) {
-      videoRef.current.srcObject = participant.stream;
+  // Callback ref — cuando el <video> se monta (al pasar participant.stream de
+  // null a un stream), React invoca esto con el elemento. Asignamos srcObject
+  // y llamamos play() explícito (autoPlay con audio puede bloquearse sin gesture).
+  const setVideoEl = useCallback((el: HTMLVideoElement | null) => {
+    if (el && participant.stream && el.srcObject !== participant.stream) {
+      el.srcObject = participant.stream;
+      el.play().catch(() => {});
     }
   }, [participant.stream]);
 
@@ -45,7 +48,7 @@ const ParticipantTile = memo(function ParticipantTile({
     >
       {participant.stream ? (
         <video
-          ref={videoRef}
+          ref={setVideoEl}
           autoPlay
           playsInline
           muted={isLocal}

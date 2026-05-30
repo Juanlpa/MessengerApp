@@ -41,7 +41,7 @@ export function ContactCard({
   }
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3 hover:bg-white/5 rounded-lg transition-colors group">
+    <div className="flex items-center gap-3 px-4 py-3 hover:bg-[#f0f2f5] dark:hover:bg-white/5 rounded-lg transition-colors group">
       {/* Avatar con inicial */}
       <div className="relative shrink-0">
         <div
@@ -50,14 +50,14 @@ export function ContactCard({
           {username[0].toUpperCase()}
         </div>
         {isOnline && (
-          <span className="absolute bottom-0 right-0 size-3 bg-green-500 rounded-full border-2 border-[#1c1c1e]" />
+          <span className="absolute bottom-0 right-0 size-3 bg-green-500 rounded-full border-2 border-white dark:border-[#1c1c1e]" />
         )}
       </div>
 
       {/* Nombre */}
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-white truncate">{username}</p>
-        <p className="text-xs text-white/40">{isOnline ? 'En línea' : 'Desconectado'}</p>
+        <p className="text-sm font-medium text-[#050505] dark:text-white truncate">{username}</p>
+        <p className="text-xs text-[#65676b] dark:text-white/40">{isOnline ? 'En línea' : 'Desconectado'}</p>
       </div>
 
       {/* Acciones */}
@@ -65,7 +65,7 @@ export function ContactCard({
         {onStartChat && (
           <button
             onClick={() => onStartChat(userId)}
-            className="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+            className="text-xs px-2 py-1 rounded bg-[#0084ff] hover:bg-[#0073e6] dark:bg-blue-600 dark:hover:bg-blue-500 text-white transition-colors"
           >
             Mensaje
           </button>
@@ -76,7 +76,7 @@ export function ContactCard({
           className={`text-xs px-2 py-1 rounded transition-colors ${
             confirming
               ? 'bg-red-600 hover:bg-red-500 text-white'
-              : 'bg-white/10 hover:bg-white/20 text-white/70'
+              : 'bg-[#e4e6eb] hover:bg-[#d8dadf] text-[#050505] dark:bg-white/10 dark:hover:bg-white/20 dark:text-white/70'
           }`}
         >
           {confirming ? '¿Confirmar?' : 'Eliminar'}

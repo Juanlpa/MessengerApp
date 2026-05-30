@@ -69,13 +69,13 @@ export function SendRequestModal({ open, onClose, onSent }: SendRequestModalProp
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-md bg-[#2c2c2e] rounded-2xl shadow-xl overflow-hidden">
+      <div className="w-full max-w-md bg-white dark:bg-[#2c2c2e] rounded-2xl shadow-xl overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
-          <h2 className="text-base font-semibold text-white">Agregar contacto</h2>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[#e4e6eb] dark:border-white/10">
+          <h2 className="text-base font-semibold text-[#050505] dark:text-white">Agregar contacto</h2>
           <button
             onClick={onClose}
-            className="text-white/50 hover:text-white transition-colors text-lg leading-none"
+            className="text-[#65676b] hover:text-[#050505] dark:text-white/50 dark:hover:text-white transition-colors text-lg leading-none"
           >
             ✕
           </button>
@@ -89,29 +89,29 @@ export function SendRequestModal({ open, onClose, onSent }: SendRequestModalProp
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Buscar por nombre de usuario..."
-            className="w-full bg-white/10 text-white placeholder-white/40 rounded-lg px-4 py-2.5 text-sm outline-none focus:ring-1 focus:ring-blue-500"
+            className="w-full bg-[#f0f2f5] dark:bg-white/10 text-[#050505] dark:text-white placeholder-[#65676b] dark:placeholder-white/40 rounded-lg px-4 py-2.5 text-sm outline-none focus:ring-1 focus:ring-blue-500"
           />
         </div>
 
         {/* Resultados */}
         <div className="px-5 pb-5 space-y-2 max-h-72 overflow-y-auto">
           {searching && (
-            <p className="text-white/40 text-sm text-center py-4">Buscando...</p>
+            <p className="text-[#65676b] dark:text-white/40 text-sm text-center py-4">Buscando...</p>
           )}
 
           {!searching && query.length >= 2 && results.length === 0 && (
-            <p className="text-white/40 text-sm text-center py-4">No se encontraron usuarios</p>
+            <p className="text-[#65676b] dark:text-white/40 text-sm text-center py-4">No se encontraron usuarios</p>
           )}
 
           {results.map((u) => (
             <div
               key={u.id}
-              className="flex items-center gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
+              className="flex items-center gap-3 p-3 rounded-lg bg-[#f0f2f5] hover:bg-[#e4e6eb] dark:bg-white/5 dark:hover:bg-white/10 transition-colors"
             >
               <div className="size-9 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold text-sm shrink-0">
                 {u.username[0].toUpperCase()}
               </div>
-              <span className="flex-1 text-sm text-white font-medium">{u.username}</span>
+              <span className="flex-1 text-sm text-[#050505] dark:text-white font-medium">{u.username}</span>
               <button
                 onClick={() => handleSend(u.id)}
                 disabled={loading || sentIds.has(u.id)}

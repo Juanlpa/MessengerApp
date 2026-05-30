@@ -57,8 +57,14 @@ export function GroupMembersList({
               <p className="text-xs text-white/40 capitalize">{m.role}</p>
             </div>
 
-            {/* Acciones */}
-            <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* Acciones — siempre visibles para que el admin las encuentre */}
+            <div className="flex items-center gap-1.5 transition-opacity">
+              {/* Etiqueta de rol */}
+              {m.role === 'admin' && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-medium uppercase tracking-wide">
+                  Admin
+                </span>
+              )}
               {canChangeRole && (
                 <button
                   onClick={() => setRoleTarget(m)}
@@ -73,7 +79,7 @@ export function GroupMembersList({
                   disabled={removing}
                   className="text-xs px-2 py-1 rounded bg-red-600/20 hover:bg-red-600/40 text-red-400 transition-colors"
                 >
-                  Quitar
+                  Expulsar
                 </button>
               )}
               {canLeave && (

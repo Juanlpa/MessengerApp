@@ -20,7 +20,13 @@ import { MessageTile } from '@/components/chat/MessageTile';
 // Hooks de llamadas y adjuntos (develop)
 import { useAttachments } from '@/hooks/useAttachments';
 import { useGroupCall } from '@/hooks/useGroupCall';
-import { useVideoFilter } from '@/hooks/useVideoFilter';
+import { useVideoFilter, type FilterId, type BackgroundId } from '@/hooks/useVideoFilter';
+import { useChatCustomization } from '@/hooks/useChatCustomization';
+import { ChatCustomizationMenu } from '@/components/chat/ChatCustomizationMenu';
+import { useThemeStore } from '@/stores/theme-store';
+import { useGroupDetail } from '@/hooks/useGroups';
+import { GroupSettings } from '@/components/groups/GroupSettings';
+import { refreshConversations } from '@/hooks/useConversations';
 
 // Componentes de adjuntos y voz (develop)
 import { AttachmentButton } from '@/components/chat/AttachmentButton';
@@ -96,6 +102,10 @@ export default function ConversationPage() {
   }, [sharedKey]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // Modo "invitado a llamada": el usuario fue invitado a una llamada grupal de
+  // una conversación de la que NO es miembro. Se le permite unirse solo a la
+  // llamada (sin acceso al chat/mensajes).
+  const [callOnlyMode, setCallOnlyMode] = useState(false);
 
   // Scroll infinito
   const [hasMore, setHasMore] = useState(false);
@@ -166,7 +176,8 @@ export default function ConversationPage() {
     leaveCall: leaveGroupCall,
     toggleAudio: toggleGroupAudio,
     toggleVideo: toggleGroupVideo,
-  } = useGroupCall(conversationId, user?.id || '', user?.username || '', sharedKey, processStream);
+    refreshVideoProcessing: refreshGroupVideoProcessing,
+  } = useGroupCall(conversationId, user?.id || '', user?.username || '', processStream);
 
   // WebRTC para llamadas 1-a-1
   const {
@@ -186,6 +197,7 @@ export default function ConversationPage() {
     isVideoMuted,
     isAudioOnly,
     isE2EMedia,
+    refreshVideoProcessing,
   } = useWebRTC(
     conversationId,
     user?.id || '',
@@ -197,6 +209,28 @@ export default function ConversationPage() {
     joinGroupCall,
     processStream
   );
+
+  // Personalización visual por chat (color de burbuja + fondo)
+  const {
+    bubbleColor,
+    background: chatBackground,
+    setBubbleColor,
+    setBackground: setChatBackground,
+  } = useChatCustomization(conversationId);
+  const currentTheme = useThemeStore(s => s.theme);
+  const chatBgColor = currentTheme === 'dark' ? chatBackground.dark : chatBackground.light;
+
+  // Ajustes del grupo (editar nombre/avatar, miembros, roles) — solo si es grupo
+  const [showGroupSettings, setShowGroupSettings] = useState(false);
+  const { group: groupDetail, refetch: refetchGroup } = useGroupDetail(isGroup ? conversationId : null);
+
+  // Mapa userId → username de los miembros del grupo (para mostrar el remitente
+  // de cada mensaje en chats grupales)
+  const memberNames = useMemo(() => {
+    const map = new Map<string, string>();
+    groupDetail?.members?.forEach((m) => map.set(m.user_id, m.username));
+    return map;
+  }, [groupDetail]);
 
   // Presencia online/offline
   const { isUserOnline } = usePresence(user?.id || '', user?.username || '');
@@ -237,15 +271,31 @@ export default function ConversationPage() {
     try {
       // 1. Enviar upgrade-to-group a Bob y notificar a Charlie (con flag isGroupCall)
       await inviteToCall(contactId, contactName);
-      // 2. Cerrar PC 1-a-1 — esto libera la cámara/mic para reusarla
-      await endOneToOneCall();
-      // 3. Unirse al canal mesh
-      await joinGroupCall();
+      // 2. Cerrar PC 1-a-1 — devuelve un CLON de la cámara para reutilizarlo
+      const reusableStream = await endOneToOneCall();
+      // 3. Unirse al canal mesh reutilizando la cámara (evita stop+getUserMedia
+      //    inmediato que congela el track en Chrome)
+      await joinGroupCall(reusableStream ?? undefined);
     } catch (err) {
       console.error('Failed to add participant:', err);
       alert('No se pudo agregar el participante. Inténtalo de nuevo.');
     }
   }, [inviteToCall, endOneToOneCall, joinGroupCall]);
+
+  // Cambio de filtro/fondo: actualiza el estado Y re-procesa el video de la
+  // llamada activa (replaceTrack). setFilter/setBackground actualizan el ref
+  // síncronamente, así que el refresh ya ve el valor nuevo.
+  const handleFilterChange = useCallback((f: FilterId) => {
+    setFilter(f);
+    if (callState === 'connected' || callState === 'calling') refreshVideoProcessing();
+    if (groupCallState === 'connected') refreshGroupVideoProcessing();
+  }, [setFilter, callState, groupCallState, refreshVideoProcessing, refreshGroupVideoProcessing]);
+
+  const handleBackgroundChange = useCallback((bg: BackgroundId) => {
+    setBackground(bg);
+    if (callState === 'connected' || callState === 'calling') refreshVideoProcessing();
+    if (groupCallState === 'connected') refreshGroupVideoProcessing();
+  }, [setBackground, callState, groupCallState, refreshVideoProcessing, refreshGroupVideoProcessing]);
 
   // Handlers para visor de imágenes y adjuntos
   const handleViewImage = useCallback((id: string) => {
@@ -438,29 +488,57 @@ export default function ConversationPage() {
       const conv = convData.conversation;
       if (!conv) throw new Error('Conversation not found');
 
-      setIsGroup(conv.isGroup || false);
+      const isGroupConv = conv.isGroup || false;
+      setIsGroup(isGroupConv);
       setGroupName(conv.groupName || '');
       setOtherUsername(conv.otherUser?.username || '');
       setOtherUserId(conv.otherUser?.id || '');
 
-      // Descifrar shared key — usar storageKey del store si ya está listo,
-      // o calcularlo en el momento si aún no llegó (race entre setAuth y setKeys)
-      const { decryptSharedKeyFromStorage } = await import('@/lib/crypto/key-exchange');
-      const { pbkdf2 } = await import('@/lib/crypto/pbkdf2');
+      let resolvedSharedKey: Uint8Array;
 
-      const storageKey = cachedStorageKey ?? pbkdf2(user.id, 'storage-salt', 1000, 32);
-      const decryptedSharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKey);
-      setSharedKey(decryptedSharedKey);
+      if (isGroupConv) {
+        // GRUPOS: la clave vive en group_keys (no en conversation_participants).
+        // Se obtiene del endpoint, que la descifra con la master key del servidor
+        // y la entrega en hex. Todos los miembros usan la misma clave de grupo.
+        const { fromHex } = await import('@/lib/crypto/utils');
+        const keyRes = await fetch(`/api/groups/${conversationId}/key`, {
+          cache: 'no-store',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!keyRes.ok) throw new Error('No se pudo obtener la clave del grupo');
+        const keyData = await keyRes.json();
+        const keyHex = keyData.keyHex ?? keyData.key ?? keyData.groupKey;
+        if (!keyHex) throw new Error('Clave de grupo no disponible');
+        resolvedSharedKey = fromHex(keyHex);
+      } else {
+        // 1-a-1: shared key DH cifrada con la storageKey del usuario
+        const { decryptSharedKeyFromStorage } = await import('@/lib/crypto/key-exchange');
+        const { pbkdf2 } = await import('@/lib/crypto/pbkdf2');
+        const storageKey = cachedStorageKey ?? pbkdf2(user.id, 'storage-salt', 1000, 32);
+        resolvedSharedKey = decryptSharedKeyFromStorage(conv.encryptedSharedKey, storageKey);
+      }
+
+      setSharedKey(resolvedSharedKey);
 
       // Cargar mensajes iniciales
-      await loadMessages(decryptedSharedKey);
+      await loadMessages(resolvedSharedKey);
     } catch (err) {
-      console.error('Init conversation error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load');
+      // Si el usuario fue invitado a una llamada grupal de una conversación de
+      // la que NO es miembro, no bloquear con error: entrar en modo solo-llamada.
+      const invitedToGroupCall =
+        shouldAutoJoinGroup ||
+        useCallStore.getState().pendingGroupJoin === conversationId;
+      if (invitedToGroupCall) {
+        // Esperado: el invitado no es miembro, solo se une a la llamada.
+        setCallOnlyMode(true);
+      } else {
+        console.error('Init conversation error:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load');
+      }
     } finally {
       setLoading(false);
     }
-  }, [token, user, conversationId, cachedStorageKey, loadMessages]);
+  }, [token, user, conversationId, cachedStorageKey, loadMessages, shouldAutoJoinGroup]);
 
   useEffect(() => {
     initConversation();
@@ -475,7 +553,10 @@ export default function ConversationPage() {
   useEffect(() => {
     const shouldJoin = shouldAutoJoinGroup || pendingGroupJoin === conversationId;
     if (!shouldJoin || hasAutoJoinedRef.current) return;
-    if (!sharedKey || !user?.id) return;
+    // La llamada grupal deriva su clave del conversationId, NO necesita la
+    // sharedKey de la conversación. Solo esperamos a tener el usuario y a no
+    // estar bloqueados por el loading inicial.
+    if (!user?.id || loading) return;
     if (groupCallState !== 'idle') return;
 
     hasAutoJoinedRef.current = true;
@@ -484,8 +565,8 @@ export default function ConversationPage() {
       hasAutoJoinedRef.current = false; // permitir reintento manual
     });
     if (pendingGroupJoin === conversationId) setPendingGroupJoin(null);
-    if (shouldAutoJoinGroup) router.replace(`/chat/${conversationId}`);
-  }, [shouldAutoJoinGroup, pendingGroupJoin, sharedKey, user?.id, groupCallState, joinGroupCall, router, conversationId, setPendingGroupJoin]);
+    if (shouldAutoJoinGroup && !callOnlyMode) router.replace(`/chat/${conversationId}`);
+  }, [shouldAutoJoinGroup, pendingGroupJoin, user?.id, loading, groupCallState, joinGroupCall, router, conversationId, setPendingGroupJoin, callOnlyMode]);
 
   // Scroll al fondo solo en la carga inicial
   useEffect(() => {
@@ -794,6 +875,37 @@ export default function ConversationPage() {
     );
   }
 
+  // Modo invitado a llamada: el usuario no es miembro de la conversación, solo
+  // puede unirse a la llamada grupal. Mostramos únicamente el GroupCallModal.
+  if (callOnlyMode) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-gray-950 text-white">
+        {groupCallState === 'idle' ? (
+          <div className="text-center">
+            <div className="w-8 h-8 border-2 border-[#0084ff] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            <p className="text-[15px]">Uniéndote a la llamada…</p>
+            <Link href="/chat" className="text-[#0084ff] text-[15px] mt-3 inline-block hover:underline">Cancelar</Link>
+          </div>
+        ) : null}
+        <GroupCallModal
+          isOpen={groupCallState !== 'idle'}
+          groupName="Llamada grupal"
+          participants={groupParticipants}
+          localVideoRef={groupLocalVideoRef}
+          isAudioMuted={groupAudioMuted}
+          isVideoMuted={groupVideoMuted}
+          onLeave={() => { leaveGroupCall(); router.push('/chat'); }}
+          onToggleAudio={toggleGroupAudio}
+          onToggleVideo={toggleGroupVideo}
+          activeFilter={activeFilter}
+          activeBackground={activeBackground}
+          onFilterChange={handleFilterChange}
+          onBackgroundChange={handleBackgroundChange}
+        />
+      </div>
+    );
+  }
+
   return (
     <>
       {/* Modales de llamada */}
@@ -817,8 +929,8 @@ export default function ConversationPage() {
         isUserOnline={isUserOnline}
         activeFilter={activeFilter}
         activeBackground={activeBackground}
-        onFilterChange={setFilter}
-        onBackgroundChange={setBackground}
+        onFilterChange={handleFilterChange}
+        onBackgroundChange={handleBackgroundChange}
       />
 
       <GroupCallModal
@@ -833,8 +945,8 @@ export default function ConversationPage() {
         onToggleVideo={toggleGroupVideo}
         activeFilter={activeFilter}
         activeBackground={activeBackground}
-        onFilterChange={setFilter}
-        onBackgroundChange={setBackground}
+        onFilterChange={handleFilterChange}
+        onBackgroundChange={handleBackgroundChange}
       />
 
       {/* Modal de reenviar mensaje */}
@@ -873,6 +985,11 @@ export default function ConversationPage() {
               <polyline points="12 19 5 12 12 5" />
             </svg>
           </Link>
+          <div
+            className={`flex items-center gap-2 flex-1 min-w-0 ${isGroup ? 'cursor-pointer rounded-lg -mx-1 px-1 py-0.5 hover:bg-[#f0f2f5] dark:hover:bg-gray-800 transition-colors' : ''}`}
+            onClick={isGroup ? () => setShowGroupSettings(true) : undefined}
+            title={isGroup ? 'Ver información del grupo' : undefined}
+          >
           <div className="relative">
             <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#0084ff] to-[#00c6ff] flex items-center justify-center text-white font-medium flex-shrink-0">
               {isGroup ? (groupName[0]?.toUpperCase() || 'G') : (otherUsername[0]?.toUpperCase() || '?')}
@@ -883,7 +1000,7 @@ export default function ConversationPage() {
             <p className="text-[#050505] dark:text-white font-semibold text-[15px] truncate">{isGroup ? groupName : otherUsername}</p>
             <div className="flex items-center gap-1 text-[13px] truncate">
               {isGroup ? (
-                <span className="text-[#65676b]">{groupParticipants.size} miembros</span>
+                <span className="text-[#65676b]">{groupDetail?.members?.length ?? 0} miembros</span>
               ) : isUserOnline(otherUserId) ? (
                 <span className="text-[#31A24C]">En línea</span>
               ) : (
@@ -896,6 +1013,7 @@ export default function ConversationPage() {
               </svg>
               <span className="text-[#65676b]">E2E</span>
             </div>
+          </div>
           </div>
           {!isGroup && (
             <>
@@ -932,6 +1050,15 @@ export default function ConversationPage() {
           >
             <Search className="w-5 h-5" />
           </button>
+
+          {/* Menú de personalización del chat (3 puntos) */}
+          <ChatCustomizationMenu
+            bubbleColor={bubbleColor}
+            background={chatBackground}
+            onBubbleColorChange={setBubbleColor}
+            onBackgroundChange={setChatBackground}
+            isDark={currentTheme === 'dark'}
+          />
         </div>
 
         {/* Barra de búsqueda */}
@@ -959,7 +1086,8 @@ export default function ConversationPage() {
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
-          className="flex-1 overflow-y-auto p-4 space-y-1 bg-white dark:bg-gray-900"
+          className="flex-1 overflow-y-auto p-4 space-y-1 transition-colors"
+          style={{ backgroundColor: chatBgColor }}
         >
           {/* Spinner de carga de más mensajes */}
           {loadingMore && (
@@ -991,7 +1119,9 @@ export default function ConversationPage() {
             const displayList = searchQuery ? filteredMessages : messages;
             const isMe = msg.senderId === user?.id;
             const nextMsg = displayList[idx + 1];
+            const prevMsg = displayList[idx - 1];
             const isLastInGroup = !nextMsg || nextMsg.senderId !== msg.senderId;
+            const isFirstInGroup = !prevMsg || prevMsg.senderId !== msg.senderId;
             const replySource = msg.replyToId
               ? messages.find(m => m.id === msg.replyToId) ?? msg.replyToSnapshot ?? null
               : null;
@@ -1020,6 +1150,9 @@ export default function ConversationPage() {
                 onLoadThumbnail={handleLoadThumbnail}
                 onDownload={triggerDownload}
                 onLoadAudio={handleLoadAudio}
+                bubbleColor={bubbleColor.hex}
+                senderName={isGroup && !isMe ? (memberNames.get(msg.senderId) || 'Miembro') : undefined}
+                showSenderName={isGroup && !isMe && isFirstInGroup}
               />
             );
           })}
@@ -1191,6 +1324,16 @@ export default function ConversationPage() {
           onClose={() => setViewerState(null)}
           onDownload={triggerDownload}
           onLoadFullImage={(id) => downloadAttachment(id, false)}
+        />
+      )}
+
+      {/* Ajustes del grupo (editar nombre/avatar, miembros, roles) */}
+      {showGroupSettings && groupDetail && (
+        <GroupSettings
+          group={groupDetail}
+          onClose={() => setShowGroupSettings(false)}
+          onUpdated={() => { refetchGroup(); refreshConversations(); }}
+          onLeftGroup={() => { refreshConversations(); router.push('/chat'); }}
         />
       )}
     </>

@@ -38,6 +38,8 @@ export function useContacts() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const user = useAuthStore(s => s.user);
+
   const fetchContacts = useCallback(async () => {
     if (!token) return;
     setLoading(true);
@@ -55,6 +57,33 @@ export function useContacts() {
   }, [token]);
 
   useEffect(() => { fetchContacts(); }, [fetchContacts]);
+
+  const fetchRef = useRef(fetchContacts);
+  useEffect(() => { fetchRef.current = fetchContacts; }, [fetchContacts]);
+
+  // Realtime: refrescar la lista cuando cambie cualquier amistad del usuario
+  // (aceptada, eliminada, etc.) — así un amigo nuevo aparece automáticamente.
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channelName = `friendships:contacts:${user.id}`;
+    const existing = supabase.getChannels().find(
+      (ch) => ch.topic === `realtime:${channelName}` || ch.topic === channelName
+    );
+    if (existing) supabase.removeChannel(existing);
+
+    const channel = supabase
+      .channel(channelName)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'friendships', filter: `requester_id=eq.${user.id}` },
+        () => fetchRef.current())
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'friendships', filter: `addressee_id=eq.${user.id}` },
+        () => fetchRef.current())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id]);
 
   return { contacts, loading, error, refetch: fetchContacts };
 }

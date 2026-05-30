@@ -11,6 +11,20 @@ import { usePushNotifications } from '@/hooks/usePushNotifications';
 function GlobalCallListenerWrapper({ userId, children }: { userId: string; children: React.ReactNode }) {
   useGlobalCallListener(userId);
   usePushNotifications();
+
+  // Al conectarse a la app, marcar como "entregados" todos los mensajes
+  // recibidos mientras estaba offline (aunque no abra cada chat) — así el
+  // remitente ve ✓✓ en tiempo real, como WhatsApp.
+  useEffect(() => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+    fetch('/api/messages/status', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ deliverAllPending: true }),
+    }).catch(() => {});
+  }, [userId]);
+
   return <>{children}</>;
 }
 

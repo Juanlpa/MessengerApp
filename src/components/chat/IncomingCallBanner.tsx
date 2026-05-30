@@ -24,11 +24,16 @@ export function IncomingCallBanner() {
   if (!incomingCall) return null;
 
   const handleAccept = () => {
-    // Si es llamada grupal, pasar el flag por query param para auto-unirse
-    const url = incomingCall.isGroupCall
-      ? `/chat/${incomingCall.conversationId}?joinGroupCall=1`
-      : `/chat/${incomingCall.conversationId}`;
-    router.push(url);
+    if (incomingCall.isGroupCall) {
+      // Llamada grupal: auto-unirse al canal mesh
+      router.push(`/chat/${incomingCall.conversationId}?joinGroupCall=1`);
+    } else {
+      // Llamada 1-a-1: marcar para que al entrar al chat se pida la oferta de
+      // nuevo y se acepte automáticamente (la oferta original se perdió porque
+      // no estábamos suscritos al canal de esa conversación).
+      useCallStore.getState().setPendingAcceptCall(incomingCall.conversationId);
+      router.push(`/chat/${incomingCall.conversationId}`);
+    }
     clearIncomingCall();
   };
 

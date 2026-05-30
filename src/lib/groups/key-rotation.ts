@@ -162,17 +162,25 @@ export async function getActiveGroupKey(
 // ─── Triggers de rotación ─────────────────────────────────────────────────────
 
 /**
- * Rota la clave cuando un nuevo miembro se une al grupo.
- * Garantía: el nuevo miembro no puede descifrar mensajes anteriores a su ingreso.
+ * Triggers de rotación en cambios de membresía.
+ *
+ * DESACTIVADOS intencionalmente: con una sola clave activa por grupo y el cliente
+ * obteniéndola siempre vía GET /api/groups/[id]/key, rotar la clave dejaba el
+ * historial ILEGIBLE para TODOS (incluido quien se queda), porque los mensajes
+ * antiguos quedaban cifrados con una versión de clave que ya no es la activa.
+ *
+ * La seguridad se mantiene por la verificación de MEMBRESÍA en el servidor:
+ *   - El endpoint de clave (y el de mensajes) solo responde a miembros activos.
+ *   - Un ex-miembro no puede obtener NINGUNA clave ni leer mensajes nuevos.
+ *
+ * Para recuperar forward/backward secrecy completa habría que versionar la clave
+ * por mensaje (messages.key_version) y que el cliente descifre con la versión
+ * correspondiente — pendiente como mejora futura.
  */
-export async function rotateOnMemberJoin(groupId: string): Promise<void> {
-  await rotateGroupKey(groupId);
+export async function rotateOnMemberJoin(_groupId: string): Promise<void> {
+  // no-op (ver comentario arriba)
 }
 
-/**
- * Rota la clave cuando un miembro abandona o es eliminado del grupo.
- * CRÍTICO: impide que el ex-miembro descifre mensajes futuros.
- */
-export async function rotateOnMemberLeave(groupId: string): Promise<void> {
-  await rotateGroupKey(groupId);
+export async function rotateOnMemberLeave(_groupId: string): Promise<void> {
+  // no-op (ver comentario arriba)
 }

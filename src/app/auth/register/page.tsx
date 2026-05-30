@@ -145,7 +145,7 @@ export default function RegisterPage() {
 
     <div>
 
-      <h2 className="text-[20px] leading-6 font-semibold text-[#1c1e21] mb-5 text-center">
+      <h2 className="text-[20px] leading-6 font-semibold text-[#1c1e21] dark:text-white mb-5 text-center">
 
         Crear cuenta nueva
 
@@ -168,7 +168,7 @@ export default function RegisterPage() {
             e.target.value
             )}
             required
-            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2]"
+            className="w-full px-4 py-[14px] rounded-[6px] bg-white dark:bg-gray-800 border border-[#dddfe2] dark:border-gray-700 text-[#1c1e21] dark:text-white placeholder-[#90949c] dark:placeholder-gray-400 focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
             placeholder="Correo electrónico"
           />
 
@@ -187,7 +187,7 @@ export default function RegisterPage() {
             )}
             required
             pattern="[a-zA-Z0-9_]{3,30}"
-            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2]"
+            className="w-full px-4 py-[14px] rounded-[6px] bg-white dark:bg-gray-800 border border-[#dddfe2] dark:border-gray-700 text-[#1c1e21] dark:text-white placeholder-[#90949c] dark:placeholder-gray-400 focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
             placeholder="Nombre de usuario"
           />
 
@@ -207,7 +207,7 @@ export default function RegisterPage() {
             )}
             required
             minLength={8}
-            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2]"
+            className="w-full px-4 py-[14px] rounded-[6px] bg-white dark:bg-gray-800 border border-[#dddfe2] dark:border-gray-700 text-[#1c1e21] dark:text-white placeholder-[#90949c] dark:placeholder-gray-400 focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
             placeholder="Contraseña nueva"
           />
 
@@ -225,7 +225,7 @@ export default function RegisterPage() {
             e.target.value
             )}
             required
-            className="w-full px-4 py-[14px] rounded-[6px] bg-white border border-[#dddfe2]"
+            className="w-full px-4 py-[14px] rounded-[6px] bg-white dark:bg-gray-800 border border-[#dddfe2] dark:border-gray-700 text-[#1c1e21] dark:text-white placeholder-[#90949c] dark:placeholder-gray-400 focus:outline-none focus:border-[#1877f2] focus:ring-1 focus:ring-[#1877f2] transition-colors text-[17px]"
             placeholder="Confirmar contraseña"
           />
 
@@ -234,7 +234,7 @@ export default function RegisterPage() {
 
         <div className="mt-2">
 
-          <label className="flex gap-2 items-start text-sm text-gray-700">
+          <label className="flex gap-2 items-start text-sm text-gray-700 dark:text-gray-300">
 
             <input
 

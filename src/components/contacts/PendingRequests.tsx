@@ -20,13 +20,13 @@ export function PendingRequests({ onAccepted }: PendingRequestsProps) {
 
   if (loading) {
     return (
-      <div className="px-4 py-3 text-white/40 text-sm">Cargando solicitudes...</div>
+      <div className="px-4 py-3 text-[#65676b] dark:text-white/40 text-sm">Cargando solicitudes...</div>
     );
   }
 
   if (requests.length === 0) {
     return (
-      <div className="px-4 py-3 text-white/40 text-sm">Sin solicitudes pendientes</div>
+      <div className="px-4 py-3 text-[#65676b] dark:text-white/40 text-sm">Sin solicitudes pendientes</div>
     );
   }
 
@@ -35,7 +35,7 @@ export function PendingRequests({ onAccepted }: PendingRequestsProps) {
       {requests.map((req) => (
         <div
           key={req.friendship_id}
-          className="flex items-center gap-3 px-4 py-3 bg-white/5 rounded-lg"
+          className="flex items-center gap-3 px-4 py-3 bg-[#f0f2f5] dark:bg-white/5 rounded-lg"
         >
           {/* Avatar */}
           <div className="size-10 rounded-full bg-purple-600 flex items-center justify-center text-white font-semibold text-sm shrink-0">
@@ -44,10 +44,10 @@ export function PendingRequests({ onAccepted }: PendingRequestsProps) {
 
           {/* Info */}
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-white truncate">
+            <p className="text-sm font-medium text-[#050505] dark:text-white truncate">
               {req.requester?.username ?? 'Usuario desconocido'}
             </p>
-            <p className="text-xs text-white/40">
+            <p className="text-xs text-[#65676b] dark:text-white/40">
               {new Date(req.sent_at).toLocaleDateString('es', {
                 day: 'numeric',
                 month: 'short',
@@ -60,14 +60,14 @@ export function PendingRequests({ onAccepted }: PendingRequestsProps) {
             <button
               onClick={() => handleRespond(req.friendship_id, 'accepted')}
               disabled={responding}
-              className="text-xs px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50"
+              className="text-xs px-3 py-1.5 rounded bg-[#0084ff] hover:bg-[#0073e6] dark:bg-blue-600 dark:hover:bg-blue-500 text-white transition-colors disabled:opacity-50"
             >
               Aceptar
             </button>
             <button
               onClick={() => handleRespond(req.friendship_id, 'rejected')}
               disabled={responding}
-              className="text-xs px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-white/70 transition-colors disabled:opacity-50"
+              className="text-xs px-3 py-1.5 rounded bg-[#e4e6eb] hover:bg-[#d8dadf] text-[#050505] dark:bg-white/10 dark:hover:bg-white/20 dark:text-white/70 transition-colors disabled:opacity-50"
             >
               Rechazar
             </button>

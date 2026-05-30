@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 
 export interface GroupMember {
@@ -50,6 +50,12 @@ export function useGroupDetail(groupId: string | null) {
       setLoading(false);
     }
   }, [token, groupId]);
+
+  // Cargar automáticamente cuando hay groupId (sin esto, group queda null siempre)
+  useEffect(() => {
+    if (groupId) fetchGroup();
+    else setGroup(null);
+  }, [groupId, fetchGroup]);
 
   return { group, loading, error, refetch: fetchGroup };
 }
@@ -190,6 +196,38 @@ export function useRemoveMember() {
   );
 
   return { removeMember, loading, error };
+}
+
+/** Eliminar el grupo por completo (solo admin) */
+export function useDeleteGroup() {
+  const token = useAuthStore(s => s.token);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const deleteGroup = useCallback(
+    async (groupId: string): Promise<boolean> => {
+      if (!token) return false;
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`/api/groups/${groupId}`, {
+          method: 'DELETE',
+          headers: authHeader(token),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { setError(data.error ?? 'Error'); return false; }
+        return true;
+      } catch {
+        setError('Error de red');
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [token]
+  );
+
+  return { deleteGroup, loading, error };
 }
 
 /** Cambiar rol de un miembro */

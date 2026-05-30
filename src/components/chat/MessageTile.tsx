@@ -7,6 +7,7 @@ import { QuotedMessage } from '@/components/chat/QuotedMessage';
 import { AttachmentPreview } from '@/components/chat/AttachmentPreview';
 import { VoicePlayer } from '@/components/chat/VoicePlayer';
 import { cleanAttachmentText } from '@/lib/crypto/message-crypto';
+import { isForwarded, stripForwardMarker } from '@/lib/chat/forward';
 
 export interface MessageData {
   id: string;
@@ -54,6 +55,12 @@ interface MessageTileProps {
   onLoadThumbnail: (id: string) => Promise<{ blobUrl: string } | null>;
   onDownload: (id: string) => Promise<void>;
   onLoadAudio: (id: string) => Promise<{ blobUrl: string } | null>;
+  /** color de las burbujas propias (personalizable por chat) */
+  bubbleColor?: string;
+  /** nombre del remitente (para mostrar en chats de grupo) */
+  senderName?: string;
+  /** mostrar el nombre del remitente encima de la burbuja (grupos) */
+  showSenderName?: boolean;
 }
 
 function MessageTileInner({
@@ -78,13 +85,41 @@ function MessageTileInner({
   onLoadThumbnail,
   onDownload,
   onLoadAudio,
+  bubbleColor = '#0084ff',
+  senderName,
+  showSenderName = false,
 }: MessageTileProps) {
   const hasAttachment = msg.attachment && msg.messageType !== 'text';
+  // Las burbujas propias usan el color personalizado (vía style); las del otro
+  // mantienen el gris del tema. Aplicamos style solo a las burbujas propias.
+  const ownBubbleStyle = isMe && !msg.isDeleted ? { backgroundColor: bubbleColor } : undefined;
+
+  // Detectar mensaje reenviado: mostrar indicador arriba y texto limpio
+  const forwarded = !msg.isDeleted && isForwarded(msg.text);
+  const displayText = forwarded ? stripForwardMarker(msg.text) : (msg.text ?? '');
 
   return (
     <div
       className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} ${isLastInGroup ? 'mb-3' : 'mb-0.5'} group`}
     >
+      {/* Nombre del remitente (chats de grupo) */}
+      {showSenderName && senderName && (
+        <span className="text-[12px] font-medium text-[#65676b] dark:text-gray-400 ml-1 mb-0.5">
+          {senderName}
+        </span>
+      )}
+
+      {/* Indicador de mensaje reenviado */}
+      {forwarded && (
+        <div className={`flex items-center gap-1 mb-0.5 text-[12px] text-[#65676b] dark:text-gray-400 italic ${isMe ? 'pr-1' : 'pl-1'}`}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 17 20 12 15 7" />
+            <path d="M4 18v-2a4 4 0 0 1 4-4h12" />
+          </svg>
+          {isMe ? 'Reenviaste un mensaje' : `${otherUsername} reenvió un mensaje`}
+        </div>
+      )}
+
       {/* Mensaje citado */}
       {replySource && (
         <QuotedMessage
@@ -183,17 +218,17 @@ function MessageTileInner({
             } ${
               !msg.isDeleted && !hasAttachment
                 ? isMe
-                  ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
+                  ? 'text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
                   : 'bg-[#e4e6eb] dark:bg-gray-700 text-[#050505] dark:text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
                 : ''
             } ${
               hasAttachment
                 ? isMe
-                  ? 'bg-[#0084ff] text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
+                  ? 'text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-br-[4px]' : '')
                   : 'bg-[#e4e6eb] dark:bg-gray-700 text-[#050505] dark:text-white rounded-[20px] ' + (isLastInGroup ? 'rounded-bl-[4px]' : '')
                 : ''
             }`}
-            style={{ wordBreak: 'break-word' }}
+            style={{ wordBreak: 'break-word', ...ownBubbleStyle }}
           >
             {msg.isDeleted ? (
               <p className="text-[14px]">Mensaje eliminado</p>
@@ -219,7 +254,7 @@ function MessageTileInner({
               />
             ) : (
               <>
-                <p className="text-[15px] leading-tight">{cleanAttachmentText(msg.text || '[Mensaje cifrado]')}</p>
+                <p className="text-[15px] leading-tight">{cleanAttachmentText(displayText || '[Mensaje cifrado]')}</p>
                 {msg.editedAt && (
                   <span className={`text-[11px] ${isMe ? 'text-blue-100' : 'text-[#65676b]'}`}> · editado</span>
                 )}
@@ -271,7 +306,10 @@ function areEqual(prev: MessageTileProps, next: MessageTileProps): boolean {
     prev.isLastInGroup === next.isLastInGroup &&
     prev.isEditing === next.isEditing &&
     prev.editText === next.editText &&
-    prev.replySource?.id === next.replySource?.id
+    prev.replySource?.id === next.replySource?.id &&
+    prev.bubbleColor === next.bubbleColor &&
+    prev.senderName === next.senderName &&
+    prev.showSenderName === next.showSenderName
   );
 }
 

@@ -98,3 +98,70 @@ export function prepareLogin(
     passwordDerivedKey,
   };
 }
+
+/**
+ * Prepara datos para cambiar contraseña en el cliente.
+ * NO envía la contraseña al servidor: deriva hashes localmente.
+ *
+ * @param currentPassword - contraseña actual (en claro, solo se usa localmente)
+ * @param newPassword - nueva contraseña (en claro, solo se usa localmente)
+ * @param currentSalt - salt actual del usuario (hex), obtenida del servidor
+ *
+ * Retorna lo que se enviará al servidor + secrets para actualizar storage local.
+ */
+export function prepareChangePassword(
+  currentPassword: string,
+  newPassword: string,
+  currentSalt: string
+): {
+  currentPasswordHash: string;
+  newPasswordHash: string;
+  newSalt: string;
+  newPasswordDerivedKey: Uint8Array;
+} {
+  const { fromHex } = require('../crypto/utils');
+
+  // Hash de la contraseña actual con la salt actual
+  const currentSaltBytes = fromHex(currentSalt);
+  const currentDerivedKey = pbkdf2(currentPassword, currentSaltBytes, PBKDF2_ITERATIONS, 32);
+  const currentPasswordHash = toHex(sha256(currentDerivedKey));
+
+  // Nueva salt aleatoria
+  const newSalt = randomBytes(16);
+  const newSaltHex = toHex(newSalt);
+
+  // Hash de la nueva contraseña con la salt nueva
+  const newPasswordDerivedKey = pbkdf2(newPassword, newSalt, PBKDF2_ITERATIONS, 32);
+  const newPasswordHash = toHex(sha256(newPasswordDerivedKey));
+
+  return {
+    currentPasswordHash,
+    newPasswordHash,
+    newSalt: newSaltHex,
+    newPasswordDerivedKey,
+  };
+}
+
+/**
+ * Prepara datos para reset-password (sin contraseña actual; se autoriza con token de email).
+ * @param newPassword - nueva contraseña (en claro, solo se usa localmente)
+ *
+ * Retorna lo que se enviará al servidor junto con el token de reset.
+ */
+export function prepareResetPassword(newPassword: string): {
+  newPasswordHash: string;
+  newSalt: string;
+  newPasswordDerivedKey: Uint8Array;
+} {
+  const newSalt = randomBytes(16);
+  const newSaltHex = toHex(newSalt);
+
+  const newPasswordDerivedKey = pbkdf2(newPassword, newSalt, PBKDF2_ITERATIONS, 32);
+  const newPasswordHash = toHex(sha256(newPasswordDerivedKey));
+
+  return {
+    newPasswordHash,
+    newSalt: newSaltHex,
+    newPasswordDerivedKey,
+  };
+}

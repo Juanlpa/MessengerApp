@@ -98,15 +98,19 @@ export async function GET(request: NextRequest) {
   // Construir respuesta
   const conversations = [];
   for (const p of participants) {
-    const otherUserId = otherUserIdByConv.get(p.conversation_id);
-    if (!otherUserId) continue;
-    const otherUser = usersById.get(otherUserId);
-    if (!otherUser) continue;
-
     const meta = convMetaById.get(p.conversation_id);
+    const isGroup = meta?.is_group ?? false;
+
+    const otherUserId = otherUserIdByConv.get(p.conversation_id);
+    const otherUser = otherUserId ? usersById.get(otherUserId) : null;
+
+    // 1-a-1: requiere el otro usuario. Grupos: se incluyen siempre, aunque el
+    // usuario sea el único miembro (p.ej. tras expulsar a todos).
+    if (!isGroup && !otherUser) continue;
+
     conversations.push({
       id: p.conversation_id,
-      otherUser,
+      otherUser: otherUser ?? { id: '', username: meta?.name ?? 'Grupo' },
       encryptedSharedKey: {
         ciphertext: p.encrypted_shared_key,
         iv: p.shared_key_iv,
@@ -116,7 +120,7 @@ export async function GET(request: NextRequest) {
       isArchived:  p.is_archived  ?? false,
       archivedAt:  p.archived_at  ?? null,
       mutedUntil:  p.muted_until  ?? null,
-      isGroup:     meta?.is_group  ?? false,
+      isGroup,
       groupName:   meta?.name      ?? null,
     });
   }

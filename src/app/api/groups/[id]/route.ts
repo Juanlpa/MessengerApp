@@ -119,3 +119,52 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 
   return NextResponse.json({ group: updated });
 }
+
+/**
+ * DELETE /api/groups/[id] — Eliminar el grupo por completo. Solo admins.
+ * Elimina en orden las dependencias (FKs sin CASCADE) y luego la conversación.
+ */
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  const user = getUserFromRequest(request);
+  if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+
+  const { id } = await context.params;
+  const supabase = getSupabaseAdmin();
+
+  // Solo un admin del grupo puede eliminarlo
+  const { data: membership } = await supabase
+    .from('conversation_participants')
+    .select('role')
+    .eq('conversation_id', id)
+    .eq('user_id', user.sub)
+    .single();
+
+  if (!membership) {
+    return NextResponse.json({ error: 'Grupo no encontrado o sin acceso' }, { status: 404 });
+  }
+  if (membership.role !== 'admin') {
+    return NextResponse.json({ error: 'Solo los administradores pueden eliminar el grupo' }, { status: 403 });
+  }
+
+  try {
+    // Mensajes del grupo (para borrar sus dependencias primero)
+    const { data: msgs } = await supabase.from('messages').select('id').eq('conversation_id', id);
+    const msgIds = (msgs ?? []).map((m: { id: string }) => m.id);
+
+    if (msgIds.length > 0) {
+      await supabase.from('message_status').delete().in('message_id', msgIds);
+      await supabase.from('message_reactions').delete().in('message_id', msgIds);
+    }
+    await supabase.from('attachments').delete().eq('conversation_id', id);
+    await supabase.from('messages').delete().eq('conversation_id', id);
+    await supabase.from('group_keys').delete().eq('group_id', id);
+    await supabase.from('calls').delete().eq('conversation_id', id);
+    await supabase.from('conversation_participants').delete().eq('conversation_id', id);
+    await supabase.from('conversations').delete().eq('id', id);
+
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error('Delete group error:', err instanceof Error ? err.message : 'unknown');
+    return NextResponse.json({ error: 'Error al eliminar el grupo' }, { status: 500 });
+  }
+}

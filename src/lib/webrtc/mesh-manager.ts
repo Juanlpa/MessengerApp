@@ -4,12 +4,19 @@
  * Cada participante mantiene N-1 RTCPeerConnections (una por cada otro participante).
  * La señalización se hace via Supabase Broadcast en el canal group_call_${conversationId}.
  *
- * Mensajes de señalización:
- *   join       { userId, username }
- *   leave      { userId }
+ * Descubrimiento de participantes: Supabase Presence (track/untrack + sync).
+ *   - Cada peer hace channel.track({ userId, username }) al suscribirse.
+ *   - 'sync' entrega la lista completa de presentes → todos se descubren sin
+ *     depender del timing de un broadcast.
+ *
+ * Señalización WebRTC (broadcast dirigido):
  *   offer      { from, to, sdp, username }
  *   answer     { from, to, sdp }
  *   ice        { from, to, candidate }
+ *
+ * Anti-glare: en cada par de peers solo el de userId MENOR crea la oferta.
+ * El de userId mayor espera la oferta y responde con answer. Esto evita que
+ * ambos oferten a la vez (que provocaría "Called in wrong state: stable").
  */
 
 import { RealtimeChannel } from '@supabase/supabase-js';
@@ -31,6 +38,17 @@ export interface MeshParticipant {
 
 type OnParticipantsChange = (participants: Map<string, MeshParticipant>) => void;
 
+// DECISIÓN DE DISEÑO: las llamadas grupales NO usan cifrado de frames manual
+// (Insertable Streams). Razones:
+//   1. El media YA va cifrado E2E por DTLS-SRTP — obligatorio en WebRTC. En la
+//      topología mesh (peer-to-peer directo) el SRTP cifra de extremo a extremo
+//      entre los participantes; el TURN solo reenvía paquetes SRTP opacos.
+//   2. El cifrado de frames manual era REDUNDANTE en mesh y corrompía el media
+//      cuando el mismo track local se enviaba a múltiples peers (doble proceso).
+// Las llamadas 1-a-1 (useWebRTC) SÍ mantienen cifrado de frames manual con la
+// shared key DH de la conversación, donde aporta valor y funciona correctamente.
+const GROUP_CALL_FRAME_ENCRYPTION = false;
+
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
@@ -51,7 +69,11 @@ export class MeshManager {
   private analyserNodes = new Map<string, AnalyserNode>();
   private audioContext: AudioContext | null = null;
   private speakingInterval: ReturnType<typeof setInterval> | null = null;
-  private hourlyKeyCache: { hourIndex: number; key: Promise<CryptoKey> } | null = null;
+  // Guardamos el CryptoKey resuelto (no la Promise) para lookups síncronos
+  // desde pc.ontrack y addTrack, donde un microtask `await` cede el event loop
+  // y deja pasar frames cifrados al decoder (congela el codec de video).
+  private hourlyKeyCache: { hourIndex: number; key: CryptoKey } | null = null;
+  private hourlyKeyDerivation: Promise<CryptoKey> | null = null;
   private onParticipantsChange: OnParticipantsChange;
 
   constructor(
@@ -63,7 +85,7 @@ export class MeshManager {
     this.onParticipantsChange = onParticipantsChange;
   }
 
-  async join(localStream: MediaStream, sharedKey?: Uint8Array | null) {
+  async join(localStream: MediaStream) {
     const videoTracks = localStream.getVideoTracks().length;
     const currentSize = this.participants.size + 1;
 
@@ -75,19 +97,25 @@ export class MeshManager {
     }
 
     this.localStream = localStream;
-    this.sharedKey = sharedKey ?? null;
+
+    // CLAVE DE GRUPO derivada del conversationId (cifrado manual).
+    // A diferencia de las llamadas 1-a-1 (que usan la sharedKey DH de la
+    // conversación), aquí todos los participantes derivan la MISMA clave a
+    // partir del conversationId — que todos conocen porque es el nombre del
+    // canal mesh. Esto permite que un invitado externo (que no tiene la
+    // sharedKey de la conversación) cifre/descifre igual que los demás.
+    // Sigue siendo cifrado manual: frame-crypto.ts (AES-GCM) + HKDF horario.
+    this.sharedKey = new TextEncoder().encode(`messenger-group-call-v1:${this.conversationId}`);
 
     // Pre-derivar la clave horaria — evita race condition donde llegan
     // frames cifrados antes de que el receiver transform esté listo
-    if (this.sharedKey && isInsertableStreamsSupported()) {
+    if (isInsertableStreamsSupported()) {
       try { await this.getHourlyKey(); } catch {}
     }
 
-    // setupSignaling() crea el canal y lo suscribe; await aquí espera la confirmación
+    // setupSignaling() crea el canal, lo suscribe y registra presencia.
     await this.setupSignaling();
 
-    // Anunciar entrada al grupo
-    this.send('join', { userId: this.userId, username: this.username });
     this.startSpeakingDetection();
   }
 
@@ -99,21 +127,38 @@ export class MeshManager {
       .forEach(ch => supabase.removeChannel(ch));
 
     this.channel = supabase.channel(`group_call_${this.conversationId}`, {
-      config: { broadcast: { self: false } },
+      config: {
+        broadcast: { self: false },
+        // Presence mantiene de forma confiable la lista de quién está en el
+        // canal — no depende del timing de un broadcast 'join' (frágil: si el
+        // otro aún no se suscribió, pierde el anuncio). Cada vez que cambia la
+        // membresía, todos reciben 'sync' con el estado completo.
+        presence: { key: this.userId },
+      },
     });
 
     this.channel
-      .on('broadcast', { event: 'join' }, async ({ payload }) => {
-        const { userId, username } = payload as { userId: string; username: string };
-        if (userId === this.userId) return;
+      .on('presence', { event: 'sync' }, () => {
+        const state = this.channel!.presenceState<{ userId: string; username: string }>();
+        // state: { [presenceKey]: [{ userId, username }, ...] }
+        for (const key of Object.keys(state)) {
+          const meta = state[key]?.[0];
+          const peerId = meta?.userId ?? key;
+          if (peerId === this.userId) continue;
 
-        // Añadir nuevo participante y crear oferta hacia él
-        this.addParticipant(userId, username);
-        await this.createOffer(userId);
+          this.addParticipant(peerId, meta?.username ?? '');
+
+          // TIE-BREAK contra glare: en cada par (A,B) solo el de userId MENOR
+          // crea la oferta. El guard en createOffer evita duplicados si 'sync'
+          // se dispara varias veces.
+          if (this.userId < peerId) {
+            this.createOffer(peerId);
+          }
+        }
       })
-      .on('broadcast', { event: 'leave' }, ({ payload }) => {
-        const { userId } = payload as { userId: string };
-        this.removePeer(userId);
+      .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
+        const peerId = (leftPresences?.[0] as { userId?: string } | undefined)?.userId ?? key;
+        this.removePeer(peerId);
       })
       .on('broadcast', { event: 'offer' }, async ({ payload }) => {
         const { from, to, sdp, username } = payload as { from: string; to: string; sdp: RTCSessionDescriptionInit; username?: string };
@@ -121,18 +166,27 @@ export class MeshManager {
 
         this.addParticipant(from, username || '');
         const pc = this.getOrCreatePeer(from);
-        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
 
-        // Flush candidates that arrived before remote description was ready
-        const queued = this.pendingCandidates.get(from) ?? [];
-        this.pendingCandidates.set(from, []);
-        for (const c of queued) {
-          await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+        // Guard contra glare: solo aceptar una oferta si NO tenemos una propia
+        // pendiente. Con el tie-break esto no debería ocurrir, pero protege
+        // ante reentradas/reconexiones.
+        if (pc.signalingState !== 'stable') return;
+
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+          const queued = this.pendingCandidates.get(from) ?? [];
+          this.pendingCandidates.set(from, []);
+          for (const c of queued) {
+            await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+          }
+
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          this.send('answer', { from: this.userId, to: from, sdp: answer });
+        } catch {
+          // Estado inválido (glare residual) — ignorar; el tie-break reintenta
         }
-
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        this.send('answer', { from: this.userId, to: from, sdp: answer });
       })
       .on('broadcast', { event: 'answer' }, async ({ payload }) => {
         const { from, to, sdp } = payload as { from: string; to: string; sdp: RTCSessionDescriptionInit };
@@ -140,13 +194,22 @@ export class MeshManager {
 
         const pc = this.peers.get(from);
         if (!pc) return;
-        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
 
-        // Flush candidates that arrived before remote description was ready
-        const queued = this.pendingCandidates.get(from) ?? [];
-        this.pendingCandidates.set(from, []);
-        for (const c of queued) {
-          await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+        // Solo aplicar el answer si estamos esperando uno (have-local-offer).
+        // Si ya estamos 'stable', el answer es duplicado/tardío → ignorar para
+        // evitar "Failed to set remote answer sdp: Called in wrong state: stable".
+        if (pc.signalingState !== 'have-local-offer') return;
+
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+          const queued = this.pendingCandidates.get(from) ?? [];
+          this.pendingCandidates.set(from, []);
+          for (const c of queued) {
+            await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+          }
+        } catch {
+          // Estado inválido — ignorar
         }
       })
       .on('broadcast', { event: 'ice' }, async ({ payload }) => {
@@ -166,15 +229,17 @@ export class MeshManager {
         }
       });
 
-    // Suscribir y esperar la confirmación SUBSCRIBED (con timeout de 10s)
+    // Suscribir, registrar presencia y esperar la confirmación (timeout 10s)
     return new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Realtime subscription timed out'));
       }, 10000);
 
-      this.channel!.subscribe((status, err) => {
+      this.channel!.subscribe(async (status, err) => {
         if (status === 'SUBSCRIBED') {
           clearTimeout(timeout);
+          // Anunciar presencia — dispara 'sync' en todos (incluido yo mismo)
+          await this.channel!.track({ userId: this.userId, username: this.username });
           resolve();
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           clearTimeout(timeout);
@@ -189,8 +254,10 @@ export class MeshManager {
       this.participants.set(userId, { userId, username, stream: null, isMuted: false, isSpeaking: false });
       this.notify();
     } else if (username) {
+      // Crear NUEVO objeto (inmutable) — React.memo en ParticipantTile compara
+      // por referencia; mutar in-place haría que el tile nunca se re-renderice.
       const p = this.participants.get(userId)!;
-      p.username = username;
+      this.participants.set(userId, { ...p, username });
       this.notify();
     }
   }
@@ -213,38 +280,60 @@ export class MeshManager {
         return s;
       })();
 
-      // Insertable Streams — descifrado
-      if (this.sharedKey && isInsertableStreamsSupported()) {
-        this.getHourlyKey()
-          .then(key => {
-            // Guard: only set up if this peer connection is still active
-            if (this.peers.get(peerId) !== pc) return;
-            return setupReceiverTransform(e.receiver, key);
-          })
-          .catch(() => {});
+      // Insertable Streams — descifrado SÍNCRONO (la clave debe estar
+      // pre-derivada por join() antes del SDP exchange)
+      if (GROUP_CALL_FRAME_ENCRYPTION && this.sharedKey && isInsertableStreamsSupported()) {
+        const key = this.getHourlyKeySync();
+        if (key) {
+          try {
+            setupReceiverTransform(e.receiver, key);
+          } catch {}
+        } else {
+          // Fallback async — frames iniciales pueden congelar el codec
+          this.getHourlyKey()
+            .then((k) => {
+              if (this.peers.get(peerId) !== pc) return;
+              setupReceiverTransform(e.receiver, k);
+            })
+            .catch(() => {});
+        }
       }
 
       const participant = this.participants.get(peerId);
       if (participant) {
-        participant.stream = stream;
+        // NUEVO objeto (inmutable) para que React.memo detecte el cambio de stream
+        this.participants.set(peerId, { ...participant, stream });
+        this.notify();
+        this.setupSpeakingDetection(peerId, stream);
+      } else {
+        // ontrack llegó antes de registrar al participante (raro) — crearlo
+        this.participants.set(peerId, { userId: peerId, username: '', stream, isMuted: false, isSpeaking: false });
         this.notify();
         this.setupSpeakingDetection(peerId, stream);
       }
     };
 
-    // Agregar tracks locales
+    // Agregar tracks locales — sender transform también síncrono
     if (this.localStream) {
-      this.localStream.getTracks().forEach((track) => {
-        const sender = pc.addTrack(track, this.localStream!);
-        if (this.sharedKey && isInsertableStreamsSupported()) {
-          this.getHourlyKey()
-            .then(key => {
-              if (this.peers.get(peerId) !== pc) return;
-              return setupSenderTransform(sender, key);
-            })
-            .catch(() => {});
+      const tracks = this.localStream.getTracks();
+      for (const track of tracks) {
+        const sender = pc.addTrack(track, this.localStream);
+        if (GROUP_CALL_FRAME_ENCRYPTION && this.sharedKey && isInsertableStreamsSupported()) {
+          const key = this.getHourlyKeySync();
+          if (key) {
+            try {
+              setupSenderTransform(sender, key);
+            } catch {}
+          } else {
+            this.getHourlyKey()
+              .then((k) => {
+                if (this.peers.get(peerId) !== pc) return;
+                setupSenderTransform(sender, k);
+              })
+              .catch(() => {});
+          }
         }
-      });
+      }
     }
 
     this.peers.set(peerId, pc);
@@ -252,6 +341,12 @@ export class MeshManager {
   }
 
   private async createOffer(peerId: string) {
+    // Guard anti-duplicado: si ya existe un peer para este id, ya estamos
+    // negociando/conectados. join + hello pueden disparar createOffer dos veces
+    // hacia el mismo peer; una segunda oferta corrompe el estado de negociación
+    // y la conexión nunca entrega media.
+    if (this.peers.has(peerId)) return;
+
     const pc = this.getOrCreatePeer(peerId);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -267,16 +362,36 @@ export class MeshManager {
     this.notify();
   }
 
-  private getHourlyKey(): Promise<CryptoKey> {
+  private async getHourlyKey(): Promise<CryptoKey> {
     const hourIndex = Math.floor(Date.now() / 3_600_000);
-    if (this.hourlyKeyCache?.hourIndex === hourIndex) return this.hourlyKeyCache.key;
-    const keyPromise = deriveHourlyKey(this.sharedKey!).catch((err) => {
-      // Clear cache so the next call retries instead of returning the same rejected Promise
-      if (this.hourlyKeyCache?.key === keyPromise) this.hourlyKeyCache = null;
+    if (this.hourlyKeyCache?.hourIndex === hourIndex) {
+      return this.hourlyKeyCache.key;
+    }
+    // Si ya hay una derivación en vuelo para esta hora, esperarla
+    if (this.hourlyKeyDerivation) return this.hourlyKeyDerivation;
+
+    this.hourlyKeyDerivation = deriveHourlyKey(this.sharedKey!).then((key) => {
+      this.hourlyKeyCache = { hourIndex, key };
+      this.hourlyKeyDerivation = null;
+      return key;
+    }).catch((err) => {
+      this.hourlyKeyDerivation = null;
       throw err;
     });
-    this.hourlyKeyCache = { hourIndex, key: keyPromise };
-    return keyPromise;
+    return this.hourlyKeyDerivation;
+  }
+
+  /**
+   * Lookup SÍNCRONO de la clave horaria. Devuelve null si no está derivada.
+   * Usar en pc.ontrack / addTrack para evitar microtask delay que
+   * permite frames cifrados llegar al decoder antes del transform.
+   */
+  private getHourlyKeySync(): CryptoKey | null {
+    const hourIndex = Math.floor(Date.now() / 3_600_000);
+    if (this.hourlyKeyCache?.hourIndex === hourIndex) {
+      return this.hourlyKeyCache.key;
+    }
+    return null;
   }
 
   private setupSpeakingDetection(userId: string, stream: MediaStream) {
@@ -304,7 +419,8 @@ export class MeshManager {
         if (participant) {
           const isSpeaking = rms > 5;
           if (participant.isSpeaking !== isSpeaking) {
-            participant.isSpeaking = isSpeaking;
+            // NUEVO objeto (inmutable) para React.memo
+            this.participants.set(userId, { ...participant, isSpeaking });
             this.notify();
           }
         }
@@ -313,7 +429,8 @@ export class MeshManager {
   }
 
   leave() {
-    this.send('leave', { userId: this.userId });
+    // untrack() retira mi presencia → los demás reciben 'leave' y me eliminan
+    this.channel?.untrack().catch(() => {});
     if (this.speakingInterval) clearInterval(this.speakingInterval);
     this.peers.forEach((pc) => pc.close());
     this.peers.clear();
@@ -326,6 +443,23 @@ export class MeshManager {
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
     this.notify();
+  }
+
+  /**
+   * Reemplaza el track de video local en TODOS los peers (replaceTrack).
+   * Úsalo al activar/desactivar filtros — el sender transform de cifrado
+   * se mantiene porque está atado al sender, no al track.
+   */
+  replaceLocalVideoTrack(newTrack: MediaStreamTrack) {
+    // Actualizar el localStream interno con el nuevo track de video
+    if (this.localStream) {
+      const audioTracks = this.localStream.getAudioTracks();
+      this.localStream = new MediaStream([newTrack, ...audioTracks]);
+    }
+    for (const pc of this.peers.values()) {
+      const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+      sender?.replaceTrack(newTrack).catch(() => {});
+    }
   }
 
   private send(event: string, payload: object) {
