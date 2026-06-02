@@ -22,12 +22,15 @@ export type CallState =
   | 'failed';
 
 interface SignalPayload {
-  type: 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'reject' | 'upgrade-to-group' | 'call-request';
+  type: 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'reject' | 'upgrade-to-group' | 'call-request' | 'screen-share';
   senderId: string;
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
   audioOnly?: boolean;
   callId?: string;
+  // Para 'screen-share': indica si el remitente empezó (true) o detuvo (false)
+  // de compartir pantalla, para que el receptor ajuste el encuadre (contain vs cover).
+  active?: boolean;
 }
 
 const ICE_SERVERS: RTCIceServer[] = [
@@ -80,6 +83,9 @@ export function useWebRTC(
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [isVideoMuted, setIsVideoMuted] = useState(false);
   const [isAudioOnly, setIsAudioOnly] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  // El OTRO participante está compartiendo su pantalla → ajustar encuadre remoto
+  const [isRemoteScreenSharing, setIsRemoteScreenSharing] = useState(false);
   const isAudioOnlyRef = useRef(false);
   const callStateRef = useRef<CallState>('idle');
 
@@ -127,6 +133,8 @@ export function useWebRTC(
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   // Raw getUserMedia stream — separate from localStream (which may be the processed/canvas stream)
   const rawStreamRef = useRef<MediaStream | null>(null);
+  // Stream de pantalla compartida (getDisplayMedia) mientras está activa
+  const screenStreamRef = useRef<MediaStream | null>(null);
   const onUpgradeToGroupRef = useRef(onUpgradeToGroup);
   onUpgradeToGroupRef.current = onUpgradeToGroup;
   const missedTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -138,7 +146,9 @@ export function useWebRTC(
   // Ref a acceptCall para poder auto-aceptar desde el handler de signals.
   const acceptCallRef = useRef<(() => Promise<void>) | null>(null);
 
-  const isE2EMedia = isInsertableStreamsSupported();
+  // E2E de frames solo aplica a VIDEO. En llamadas de solo voz el medio va
+  // protegido por SRTP/DTLS (cifrado de transporte), no por cifrado de frames.
+  const isE2EMedia = isInsertableStreamsSupported() && !isAudioOnly;
 
   const stopRingtone = useCallback(() => stopRingtoneFn(), []);
   const playRingtone = useCallback(() => startRingtone(), []);
@@ -298,6 +308,9 @@ export function useWebRTC(
               pendingCandidatesRef.current.push(signal.candidate);
             }
           }
+        } else if (signal.type === 'screen-share') {
+          // El otro empezó/dejó de compartir pantalla → ajustar encuadre del video remoto
+          setIsRemoteScreenSharing(!!signal.active);
         } else if (signal.type === 'hangup') {
           stopRingtone();
           cleanupRef.current?.('ended');
@@ -397,7 +410,11 @@ export function useWebRTC(
     // primer frame para no congelar el decoder. La clave debe estar pre-derivada
     // por initiateCall/acceptCall (getHourlyKey llamado antes del SDP exchange).
     pc.ontrack = (event) => {
-      if (sharedKeyRef.current && isInsertableStreamsSupported()) {
+      // Solo ciframos frames de VIDEO. El audio va protegido por SRTP/DTLS
+      // (cifrado de transporte siempre activo). Cifrar el audio con Insertable
+      // Streams es redundante y, por una asimetría en la derivación de clave
+      // entre quien llama y quien acepta, dejaba el audio ilegible (sin sonido).
+      if (event.track.kind === 'video' && sharedKeyRef.current && isInsertableStreamsSupported()) {
         const hourKey = getHourlyKeySync();
         if (hourKey) {
           try {
@@ -437,7 +454,8 @@ export function useWebRTC(
         const sender = pc.addTrack(track, localStream.current);
         // Guardar el sender de video para poder hacer replaceTrack al cambiar filtros
         if (track.kind === 'video') videoSenderRef.current = sender;
-        if (sharedKeyRef.current && isInsertableStreamsSupported()) {
+        // Solo cifrar frames de VIDEO (el audio va por SRTP — ver nota en ontrack)
+        if (track.kind === 'video' && sharedKeyRef.current && isInsertableStreamsSupported()) {
           const hourKey = getHourlyKeySync();
           if (hourKey) {
             try {
@@ -546,7 +564,8 @@ export function useWebRTC(
     for (const track of localStream.current!.getTracks()) {
       const sender = currentPc!.addTrack(track, localStream.current!);
       if (track.kind === 'video') videoSenderRef.current = sender;
-      if (sharedKeyRef.current && isInsertableStreamsSupported() && hourKey) {
+      // Solo cifrar frames de VIDEO (el audio va por SRTP — ver nota en ontrack)
+      if (track.kind === 'video' && sharedKeyRef.current && isInsertableStreamsSupported() && hourKey) {
         try {
           const container = setupSenderTransform(sender, hourKey);
           keyContainersRef.current.push(container);
@@ -656,6 +675,8 @@ export function useWebRTC(
     localStream.current = null;
     rawStreamRef.current?.getTracks().forEach((t) => t.stop());
     rawStreamRef.current = null;
+    screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+    screenStreamRef.current = null;
     remoteStream.current = null;
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
@@ -665,6 +686,8 @@ export function useWebRTC(
     setIsAudioMuted(false);
     setIsVideoMuted(false);
     setIsAudioOnly(false);
+    setIsScreenSharing(false);
+    setIsRemoteScreenSharing(false);
 
     // Show terminal states briefly, then auto-close the modal
     if (status && TRANSITIONAL_STATES.has(status as CallState)) {
@@ -749,6 +772,72 @@ export function useWebRTC(
     }
   }, [processStream]);
 
+  /**
+   * Detiene la compartición de pantalla y vuelve a la cámara.
+   * refreshVideoProcessing() re-procesa el stream crudo de la cámara y hace
+   * replaceTrack en el sender (manteniendo el cifrado E2E del sender transform).
+   */
+  const stopScreenShare = useCallback(() => {
+    const screen = screenStreamRef.current;
+    if (screen) {
+      screen.getTracks().forEach((t) => t.stop());
+      screenStreamRef.current = null;
+    }
+    setIsScreenSharing(false);
+    sendSignal({ type: 'screen-share', active: false });
+    refreshVideoProcessing(); // vuelve a la cámara
+  }, [refreshVideoProcessing, sendSignal]);
+
+  /**
+   * Alterna compartir pantalla (solo videollamadas, solo escritorio).
+   * Sustituye el track de la cámara por el de la pantalla en el MISMO sender,
+   * así el cifrado E2E (Insertable Streams) se mantiene y el peer lo ve en el
+   * mismo elemento de video, sin renegociar SDP.
+   */
+  const toggleScreenShare = useCallback(async () => {
+    if (isAudioOnlyRef.current || !videoSenderRef.current) return;
+
+    // Ya compartiendo → detener
+    if (screenStreamRef.current) {
+      stopScreenShare();
+      return;
+    }
+
+    // Feature-detect: los navegadores móviles no soportan getDisplayMedia
+    if (typeof navigator === 'undefined' || !('getDisplayMedia' in navigator.mediaDevices)) {
+      alert('Tu navegador o dispositivo no permite compartir pantalla (no disponible en móviles).');
+      return;
+    }
+
+    try {
+      const screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const screenTrack = screen.getVideoTracks()[0];
+      if (!screenTrack) return;
+      screenStreamRef.current = screen;
+
+      // Reemplazar el track de video en el sender (conserva el transform de cifrado)
+      await videoSenderRef.current.replaceTrack(screenTrack).catch(() => {});
+
+      // Reconstruir el stream local con la pantalla + el audio existente
+      const audioTracks = localStream.current?.getAudioTracks()
+        ?? rawStreamRef.current?.getAudioTracks() ?? [];
+      const merged = new MediaStream([screenTrack, ...audioTracks]);
+      localStream.current = merged;
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = merged;
+        localVideoRef.current.play().catch(() => {});
+      }
+
+      setIsScreenSharing(true);
+      sendSignal({ type: 'screen-share', active: true });
+
+      // El usuario puede detener desde la barra nativa del navegador ("Dejar de compartir")
+      screenTrack.onended = () => { stopScreenShare(); };
+    } catch {
+      // El usuario canceló el selector de pantalla — no hacer nada
+    }
+  }, [stopScreenShare, sendSignal]);
+
   return {
     callState,
     refreshVideoProcessing,
@@ -766,9 +855,12 @@ export function useWebRTC(
     endOneToOneCall,
     toggleAudio,
     toggleVideo,
+    toggleScreenShare,
     isAudioMuted,
     isVideoMuted,
     isAudioOnly,
+    isScreenSharing,
+    isRemoteScreenSharing,
     isE2EMedia,
   };
 }

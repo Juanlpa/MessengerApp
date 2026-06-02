@@ -75,21 +75,18 @@ export async function GET(request: NextRequest) {
   const usersById = new Map<string, { id: string; username: string }>();
   for (const u of (usersData ?? []) as Array<{ id: string; username: string }>) usersById.set(u.id, u);
 
-  // Query 4: último mensaje por conversación (solo created_at, sin contenido cifrado)
-  const messagesPromises = conversationIds.map(async (id) => {
-    const { data } = await supabase
-      .from('messages')
-      .select('conversation_id, created_at')
-      .eq('conversation_id', id)
-      .order('created_at', { ascending: false })
-      .limit(1);
-    return data?.[0] || null;
-  });
-  const messagesResults = await Promise.all(messagesPromises);
-  const messages = messagesResults.filter(Boolean) as Array<{ conversation_id: string; created_at: string }>;
+  // Query 4: último mensaje por conversación — UNA sola consulta (antes era N+1:
+  // una query por conversación). Se traen (conversation_id, created_at) de todas
+  // las conversaciones ordenadas desc; el primero de cada conversación es el más
+  // reciente. Aprovecha el índice (conversation_id, created_at) de messages.
+  const { data: allMsgs } = await supabase
+    .from('messages')
+    .select('conversation_id, created_at')
+    .in('conversation_id', conversationIds)
+    .order('created_at', { ascending: false });
 
   const lastMessageByConv = new Map<string, string>();
-  for (const msg of messages) {
+  for (const msg of (allMsgs ?? []) as Array<{ conversation_id: string; created_at: string }>) {
     if (!lastMessageByConv.has(msg.conversation_id)) {
       lastMessageByConv.set(msg.conversation_id, msg.created_at);
     }

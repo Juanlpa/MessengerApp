@@ -103,12 +103,13 @@ export function Sidebar() {
     if (!token || !user) return;
     setCreating(true);
     try {
-      const { generateDHKeyPairAsync } = await import('@/workers/dh-worker-client');
-      const { deriveSharedKey, encryptSharedKeyForStorage } = await import('@/lib/crypto/key-exchange');
+      const { generateDHKeyPairAsync, deriveSharedKeyAsync } = await import('@/workers/dh-worker-client');
+      const { encryptSharedKeyForStorage } = await import('@/lib/crypto/key-exchange');
       const { pbkdf2 } = await import('@/lib/crypto/pbkdf2');
 
       const myKeyPair = await generateDHKeyPairAsync();
-      const sharedKey = deriveSharedKey(myKeyPair.privateKey, otherUser.dh_public_key);
+      // computeSharedSecret (modPow ~300ms) también fuera del main thread
+      const sharedKey = await deriveSharedKeyAsync(myKeyPair.privateKey, otherUser.dh_public_key);
 
       // Leer storageKey cacheado del store; solo recalcular el del otro usuario
       const myStorageKey = useAuthStore.getState().storageKey || pbkdf2(user.id, 'storage-salt', 1000, 32);

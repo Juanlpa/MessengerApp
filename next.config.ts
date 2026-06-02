@@ -26,6 +26,13 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   compress: true,
+  // Permite que el dev server acepte peticiones desde túneles HTTPS
+  // (cloudflared / ngrok) al probar desde el celular. Solo afecta a `next dev`.
+  allowedDevOrigins: [
+    '*.trycloudflare.com',
+    '*.ngrok-free.app',
+    '*.ngrok.io',
+  ],
   experimental: {
     optimizePackageImports: ['lucide-react'],
   },

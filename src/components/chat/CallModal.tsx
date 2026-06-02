@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
-import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Shield, ShieldAlert, UserPlus, X, Search, Sparkles } from 'lucide-react';
+import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Shield, ShieldAlert, UserPlus, X, Search, Sparkles, ScreenShare, ScreenShareOff } from 'lucide-react';
 import { CallState } from '@/hooks/useWebRTC';
 import { VideoFilterPanel } from '@/components/calls/VideoFilterPanel';
 import { type FilterId } from '@/lib/filters/canvas-filters';
@@ -23,8 +23,11 @@ interface CallModalProps {
   onEndCall: () => void;
   onToggleAudio: () => void;
   onToggleVideo: () => void;
+  onToggleScreenShare?: () => void;
   isAudioMuted: boolean;
   isVideoMuted: boolean;
+  isScreenSharing?: boolean;
+  isRemoteScreenSharing?: boolean;
   isAudioOnly?: boolean;
   isE2EMedia?: boolean;
   token?: string;
@@ -93,8 +96,11 @@ export function CallModal({
   onEndCall,
   onToggleAudio,
   onToggleVideo,
+  onToggleScreenShare,
   isAudioMuted,
   isVideoMuted,
+  isScreenSharing = false,
+  isRemoteScreenSharing = false,
   isAudioOnly = false,
   isE2EMedia = false,
   token,
@@ -115,6 +121,16 @@ export function CallModal({
   const [invitingId, setInvitingId] = useState<string | null>(null);
   const contactsAbortRef = useRef<AbortController | null>(null);
   const [callSeconds, setCallSeconds] = useState(0);
+  // Compartir pantalla solo en navegadores con getDisplayMedia (no en móviles).
+  // Se calcula en efecto para evitar desajustes de hidratación SSR.
+  const [canScreenShare, setCanScreenShare] = useState(false);
+  useEffect(() => {
+    setCanScreenShare(
+      typeof navigator !== 'undefined' &&
+      !!navigator.mediaDevices &&
+      'getDisplayMedia' in navigator.mediaDevices
+    );
+  }, []);
 
   useEffect(() => {
     if (callState !== 'connected') {
@@ -240,23 +256,27 @@ export function CallModal({
           ref={remoteVideoRef}
           autoPlay
           playsInline
-          className={`w-full h-full object-cover flex-1 ${(isAudioOnly || isTerminal) ? 'hidden' : ''}`}
+          className={`w-full h-full flex-1 ${
+            isRemoteScreenSharing ? 'object-contain bg-black' : 'object-cover'
+          } ${(isAudioOnly || isTerminal) ? 'hidden' : ''}`}
         />
 
         {/* Local video PiP — se mueve a la esquina inferior izquierda cuando se abre el panel
-            de contactos (para no superponerse ni con el header ni con la barra de controles). */}
+            de contactos. En móvil se eleva por ENCIMA de la barra de controles
+            (bottom-28) para no tapar los botones (filtros, etc.); en escritorio
+            la barra está centrada y hay espacio en la esquina, así que se queda abajo. */}
         {showLocalVideo && (
           <div className={`absolute aspect-video bg-gray-800 rounded-lg overflow-hidden shadow-lg border border-gray-700 transition-all duration-200 z-10 ${
             showContacts
-              ? 'bottom-6 left-6 w-24 sm:w-36'
-              : 'bottom-6 right-6 w-28 sm:w-48'
+              ? 'top-16 left-4 w-24 sm:top-auto sm:bottom-6 sm:left-6 sm:w-36'
+              : 'top-16 right-4 w-28 sm:top-auto sm:bottom-6 sm:right-6 sm:w-48'
           }`}>
             <video
               ref={localVideoRef}
               autoPlay
               playsInline
               muted
-              className="w-full h-full object-cover"
+              className={`w-full h-full ${isScreenSharing ? 'object-contain bg-black' : 'object-cover'}`}
             />
           </div>
         )}
@@ -457,6 +477,21 @@ export function CallModal({
                     } text-white`}
                   >
                     {isVideoMuted ? <VideoOff className="w-5 h-5 sm:w-6 sm:h-6" /> : <Video className="w-5 h-5 sm:w-6 sm:h-6" />}
+                  </button>
+                )}
+
+                {/* Compartir pantalla — solo videollamadas y navegadores con soporte (escritorio) */}
+                {!isAudioOnly && onToggleScreenShare && canScreenShare && (callState === 'connected' || callState === 'calling') && (
+                  <button
+                    onClick={onToggleScreenShare}
+                    className={`p-3 sm:p-4 rounded-full transition-colors shadow-lg ${
+                      isScreenSharing ? 'bg-[#0084ff] hover:bg-[#0070d8]' : 'bg-gray-700 hover:bg-gray-600'
+                    } text-white`}
+                    title={isScreenSharing ? 'Dejar de compartir pantalla' : 'Compartir pantalla'}
+                  >
+                    {isScreenSharing
+                      ? <ScreenShareOff className="w-5 h-5 sm:w-6 sm:h-6" />
+                      : <ScreenShare className="w-5 h-5 sm:w-6 sm:h-6" />}
                   </button>
                 )}
 

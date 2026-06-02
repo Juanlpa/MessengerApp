@@ -218,10 +218,29 @@ export function useAttachments(
       const decryptFn = isThumbnail ? decryptThumbnail : decryptFile;
       const decryptedBytes = decryptFn(encrypted, sharedKey);
 
-      // Crear URL para mostrar en el navegador
-      const blobUrl = bytesToBlobUrl(decryptedBytes, mimeType);
+      // Para audio: el MIME guardado puede no coincidir con los bytes reales
+      // (audios viejos grabados como ogg pero etiquetados 'audio/webm'), lo que
+      // hace fallar la reproducción con NotSupportedError. Detectamos el formato
+      // REAL por magic bytes — nunca miente — y lo usamos para crear el blob.
+      let mediaBytes = decryptedBytes;
+      let effectiveMime = mimeType;
+      if (mimeType.startsWith('audio/')) {
+        // Algunos audios quedaron con un byte espurio al inicio que desplaza la
+        // cabecera del contenedor (p.ej. '1a 1a 45 df a3...' en vez de
+        // '1a 45 df a3...'), lo que rompe la reproducción (DEMUXER_ERROR).
+        // Saneamos: si no empieza con una cabecera de audio conocida, la buscamos
+        // en los primeros bytes y recortamos el sobrante.
+        mediaBytes = sanitizeAudioContainer(decryptedBytes);
+        // El MIME guardado puede no coincidir con los bytes reales — detectamos
+        // el formato verdadero por magic bytes (nunca miente).
+        const detected = detectMimeType(mediaBytes);
+        if (detected && detected.startsWith('audio/')) effectiveMime = detected;
+      }
 
-      return { blobUrl, filename, mimeType, sizeBytes };
+      // Crear URL para mostrar en el navegador
+      const blobUrl = bytesToBlobUrl(mediaBytes, effectiveMime);
+
+      return { blobUrl, filename, mimeType: effectiveMime, sizeBytes };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Error al descargar';
       setError(msg);
@@ -275,6 +294,28 @@ function createBlobFromEncrypted(encrypted: EncryptedData): Blob {
   const bytes = hexToBytes(encrypted.ciphertext);
   const buffer = new Uint8Array(bytes).buffer as ArrayBuffer;
   return new Blob([buffer], { type: 'application/octet-stream' });
+}
+
+/**
+ * Repara audios cuyo contenedor quedó con bytes espurios al inicio (un '0x1a'
+ * duplicado desplaza la cabecera EBML de WebM y rompe el demuxer). Si los bytes
+ * no empiezan con una firma de audio conocida, busca la firma en los primeros
+ * bytes y recorta lo que sobra. Si no encuentra nada, devuelve los bytes intactos.
+ */
+function sanitizeAudioContainer(bytes: Uint8Array): Uint8Array {
+  const WEBM = [0x1a, 0x45, 0xdf, 0xa3]; // EBML (WebM/Matroska)
+  const OGG = [0x4f, 0x67, 0x67, 0x53];  // 'OggS'
+  const matchesAt = (sig: number[], off: number) =>
+    sig.every((b, i) => bytes[off + i] === b);
+
+  if (matchesAt(WEBM, 0) || matchesAt(OGG, 0)) return bytes;
+
+  for (let off = 1; off <= 16 && off + 4 <= bytes.length; off++) {
+    if (matchesAt(WEBM, off) || matchesAt(OGG, off)) {
+      return bytes.slice(off);
+    }
+  }
+  return bytes;
 }
 
 /** Hex string → Uint8Array */

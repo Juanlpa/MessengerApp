@@ -39,6 +39,8 @@ export interface VoiceRecorderResult {
   waveformData: number[];
   /** Tamaño del blob original en bytes */
   sizeBytes: number;
+  /** MIME real con el que grabó MediaRecorder (webm/ogg/mp4 según el navegador) */
+  mimeType: string;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -110,7 +112,12 @@ export function useVoiceRecorder(sharedKey: Uint8Array | null) {
         }
       };
 
-      recorder.start(100); // Chunk cada 100ms
+      // Sin timeslice: MediaRecorder entrega UN solo blob completo al detener.
+      // Con timeslice (start(100)) algunas versiones de Chrome emiten un primer
+      // fragmento espurio de 1 byte antes de la cabecera, corrompiendo el WebM
+      // (cabecera EBML desplazada → el reproductor falla con DEMUXER_ERROR).
+      // La waveform no depende de estos chunks (usa AnalyserNode aparte).
+      recorder.start();
       startTimeRef.current = Date.now();
       setState('recording');
       setDurationMs(0);
@@ -197,6 +204,8 @@ export function useVoiceRecorder(sharedKey: Uint8Array | null) {
             durationMs: finalDuration,
             waveformData: finalWaveform,
             sizeBytes: audioBytes.length,
+            // El tipo REAL del blob (no asumir webm: en algunos navegadores es ogg/mp4)
+            mimeType: recorder.mimeType || 'audio/webm',
           });
         } catch (err) {
           console.error('[VoiceRecorder] Encryption error:', err);

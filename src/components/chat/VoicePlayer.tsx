@@ -38,6 +38,7 @@ export function VoicePlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(durationMs / 1000);
   const [speed, setSpeed] = useState<PlaybackSpeed>(1);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const audioRef       = useRef<HTMLAudioElement | null>(null);
   const canvasRef      = useRef<HTMLCanvasElement>(null);
@@ -74,20 +75,27 @@ export function VoicePlayer({
   // ── Play/Pause ──────────────────────────────────────────────────
   const togglePlay = useCallback(async () => {
     if (isLoading) return;
+    setLoadFailed(false);
 
     if (!audioRef.current) {
       const url = await loadAudio();
-      if (!url) return;
+      if (!url) { setLoadFailed(true); return; }
 
-      const audio = new Audio(url);
+      // Crear el elemento y adjuntar handlers ANTES de asignar src, para no
+      // perder un posible evento de error durante la selección del recurso.
+      const audio = new Audio();
+      audio.preload = 'auto';
       audio.playbackRate = speed;
       audioRef.current = audio;
 
       audio.onloadedmetadata = () => {
+        setLoadFailed(false);
         if (audio.duration && isFinite(audio.duration)) {
           setDuration(audio.duration);
         }
       };
+
+      audio.oncanplay = () => setLoadFailed(false);
 
       audio.onended = () => {
         setIsPlaying(false);
@@ -96,9 +104,22 @@ export function VoicePlayer({
       };
 
       audio.onerror = () => {
-        console.error('[VoicePlayer] Audio playback error');
+        // Diagnóstico completo: code (1=ABORTED 2=NETWORK 3=DECODE 4=SRC_NOT_SUPPORTED),
+        // networkState (3=NO_SOURCE), readyState. Si error es null suele ser
+        // un blob revocado o un fallo de red del object URL.
+        console.warn('[VoicePlayer] No se pudo reproducir el audio', {
+          errorCode: audio.error?.code ?? null,
+          errorMessage: audio.error?.message ?? null,
+          networkState: audio.networkState,
+          readyState: audio.readyState,
+          srcSet: !!audio.src,
+        });
         setIsPlaying(false);
+        setLoadFailed(true);
       };
+
+      audio.src = url;
+      audio.load();
     }
 
     const audio = audioRef.current;
@@ -109,9 +130,16 @@ export function VoicePlayer({
       setIsPlaying(false);
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
     } else {
-      await audio.play();
-      setIsPlaying(true);
-      updateProgress();
+      try {
+        await audio.play();
+        setIsPlaying(true);
+        updateProgress();
+      } catch (err) {
+        // play() rechaza si el formato no es reproducible o falta gesto de usuario
+        console.warn('[VoicePlayer] play() rechazado:', err);
+        setIsPlaying(false);
+        setLoadFailed(true);
+      }
     }
   }, [isPlaying, isLoading, loadAudio, speed]);
 
@@ -243,9 +271,11 @@ export function VoicePlayer({
         />
         <div className="flex items-center justify-between">
           <span className={`text-[11px] font-mono ${
-            isOwnMessage ? 'text-white/60' : 'text-[#65676b]'
+            loadFailed
+              ? (isOwnMessage ? 'text-red-200' : 'text-red-500')
+              : (isOwnMessage ? 'text-white/60' : 'text-[#65676b]')
           }`}>
-            {displayTime}
+            {loadFailed ? 'No se pudo reproducir' : displayTime}
           </span>
           <button
             onClick={cycleSpeed}

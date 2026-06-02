@@ -28,12 +28,14 @@
 
 ### Insertable Streams / Encoded Transform (Chrome/Edge only)
 - **Spec:** [W3C WebRTC Encoded Transform](https://www.w3.org/TR/webrtc-encoded-transform/)
-- **Algorithm:** AES-GCM 256-bit applied to every encoded video/audio frame
+- **Algorithm:** AES-GCM 256-bit applied to every encoded **video** frame
+- **Scope — video only:** Frame encryption is applied **only to video tracks**. Audio relies on DTLS-SRTP (transport encryption, always on). Reason: layering AES-GCM over SRTP for audio is redundant, and a key-derivation asymmetry between caller and callee left audio undecodable (silent) on voice calls. Video keeps full E2E frame encryption in 1-to-1 calls. (Group calls disable frame encryption entirely — see `GROUP_CALL_FRAME_ENCRYPTION`.)
 - **Key derivation:** HKDF (SHA-256) using the ECDH shared key as input keying material and `hourIndex = floor(now / 3 600 000)` as salt — both peers independently derive the same key every hour without additional communication
-- **Frame format:** `[unencrypted header (1 byte audio / 0 bytes video)] [IV 12 bytes] [AES-GCM ciphertext]`
+- **Frame format (video):** `[IV 12 bytes] [AES-GCM ciphertext]`
 - **Key rotation:** `setInterval(1h)` updates all active `KeyContainer` objects in-place, so running TransformStreams pick up the new key on the next frame without being recreated
 - **Hourly key cache:** Both `useWebRTC` and `MeshManager` cache the derived `CryptoKey` keyed by `hourIndex`; HKDF derivation runs at most once per hour per call session. Cache is invalidated on rejection to allow retry.
-- **UI indicator:** `CallModal` shows "E2E Completo" (green shield) when Insertable Streams is active, "SRTP Estándar" (yellow) when falling back to DTLS-SRTP only
+- **UI indicator:** `CallModal` shows "E2E Completo" (green shield) on video calls when Insertable Streams is active, and "SRTP Estándar" (yellow) on voice-only calls or when falling back to DTLS-SRTP — honestly reflecting that voice-only media is protected by SRTP, not frame encryption
+- **Screen sharing (1-to-1):** Sharing replaces the camera track on the same `RTCRtpSender` via `replaceTrack()`, so the video frame-encryption transform stays attached — the shared screen is E2E-encrypted exactly like the camera, with no SDP renegotiation
 - **Files:** `src/lib/webrtc/frame-crypto.ts`, `src/lib/webrtc/insertable-streams.ts`
 
 ---
@@ -75,7 +77,27 @@
 
 ---
 
-## 7. Threat Model & Known Limitations
+## 7. Client-Side Storage & the "Layer 3" Local Cache Decision
+
+The original design contemplated a **three-layer encryption model**:
+1. **Layer 1 — E2E:** AES-GCM with the per-conversation shared key (client-side).
+2. **Layer 2 — At-rest:** A second AES-GCM layer applied server-side with `ENCRYPTION_MASTER_KEY` before storing in the database.
+3. **Layer 3 — Local cache:** An encrypted IndexedDB cache of decrypted messages on the client.
+
+**Decision: Layer 3 is intentionally NOT implemented.** Messages are not persisted in plaintext or ciphertext on the client; they are fetched from the server and decrypted in memory on demand.
+
+**Rationale (security-first):**
+- **Smaller attack surface.** Persisting decrypted (or locally re-encrypted) message history on the device creates a new at-rest target. On a shared/compromised machine, an encrypted IndexedDB store is only as strong as the wrapping key — and that key (`storageKey`) is **PBKDF2 over the public `userId`**, i.e. derivable by anyone who knows the user id. It would provide obfuscation, not real confidentiality.
+- **No confidentiality benefit.** Because the local wrapping key is derivable from public data, a Layer-3 cache would not raise the security bar; it would only add complexity (cache invalidation, key rotation, eviction) and risk.
+- **Layers 1 and 2 are unaffected.** Full E2E (Layer 1) and server at-rest (Layer 2) remain in place. What *is* persisted client-side is minimal and non-sensitive: the JWT and the ECDH **shared key wrapped with `storageKey`** in `sessionStorage` (cleared when the tab closes), plus UI preferences (per-chat colors/background) in `localStorage`.
+
+**Trade-off accepted:** no offline message history; every chat open re-fetches from the server. For a security-focused messenger this is the desirable default (data minimization on the endpoint).
+
+**Files:** `src/lib/crypto/storage-crypto.ts` (shared-key wrapping), `src/hooks/useAuth.ts` (session storage).
+
+---
+
+## 8. Threat Model & Known Limitations
 
 | Threat | Mitigation | Gap |
 |--------|-----------|-----|
@@ -88,11 +110,13 @@
 | ICE candidate race | Pending queue flushed after setRemoteDescription | None — fully mitigated |
 | Rejected Promise in key cache | Cache cleared on HKDF failure, next call retries | None — fully mitigated |
 | Forward secrecy | Not implemented — shared key is static per conversation | Would require Double Ratchet (Signal Protocol) |
+| Local message exfiltration from device | No plaintext message cache persisted on the client (Layer 3 intentionally omitted — see §7) | None — endpoint stores no message history |
+| Voice-call media interception at TURN | DTLS-SRTP (transport) | Audio is not frame-encrypted; readable at a malicious TURN relay. Video uses Insertable Streams E2E (Chrome) |
 | TURN server trust | OpenRelay (public) used for NAT traversal | For production: use own Coturn with ephemeral HMAC-SHA1 credentials |
 
 ---
 
-## 8. Quick Reference
+## 9. Quick Reference
 
 | What | Algorithm | Where |
 |------|-----------|-------|

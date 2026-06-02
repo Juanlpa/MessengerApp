@@ -22,9 +22,11 @@ interface VoiceRecordButtonProps {
   sharedKey: Uint8Array | null;
   onVoiceReady: (result: VoiceRecorderResult) => Promise<void>;
   disabled?: boolean;
+  /** Avisa al padre cuando hay una grabación activa (para ocultar el input y dar espacio) */
+  onRecordingChange?: (recording: boolean) => void;
 }
 
-export function VoiceRecordButton({ sharedKey, onVoiceReady, disabled = false }: VoiceRecordButtonProps) {
+export function VoiceRecordButton({ sharedKey, onVoiceReady, disabled = false, onRecordingChange }: VoiceRecordButtonProps) {
   const [sending, setSending] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_swipeHint, setSwipeHint] = useState<'none' | 'lock' | 'cancel'>('none');
@@ -39,6 +41,12 @@ export function VoiceRecordButton({ sharedKey, onVoiceReady, disabled = false }:
     state, formattedDuration, waveformData, error,
     startRecording, stopRecording, cancelRecording, lockRecording, clearError,
   } = useVoiceRecorder(sharedKey);
+
+  // Notificar al padre cuando la grabación está activa (recording/locked)
+  const isActive = state === 'recording' || state === 'locked';
+  useEffect(() => {
+    onRecordingChange?.(isActive);
+  }, [isActive, onRecordingChange]);
 
   // Mantener doSendRef siempre actualizado sin re-crear el effect
   doSendRef.current = useCallback(async () => {
@@ -171,15 +179,15 @@ export function VoiceRecordButton({ sharedKey, onVoiceReady, disabled = false }:
   // ── RECORDING: waveform + cancelar + enviar ─────────────────────
   if (state === 'recording') {
     return (
-      <div className="flex items-center gap-2 bg-red-50 border border-red-100 rounded-full pl-3 pr-1 py-1 animate-in slide-in-from-right-2 duration-200 select-none">
+      <div className="flex-1 min-w-0 flex items-center gap-2 bg-red-50 border border-red-100 rounded-full pl-3 pr-1 py-1 animate-in slide-in-from-right-2 duration-200 select-none">
         <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
 
-        <span className="text-[14px] font-mono text-red-600 font-medium min-w-[40px]">
+        <span className="text-[14px] font-mono text-red-600 font-medium min-w-[40px] flex-shrink-0">
           {formattedDuration}
         </span>
 
         {/* Mini waveform */}
-        <div className="flex items-center gap-[2px] h-6 mx-1">
+        <div className="flex-1 min-w-0 flex items-center justify-end gap-[2px] h-6 mx-1 overflow-hidden">
           {waveformData.slice(-10).map((val, i) => (
             <div
               key={i}
@@ -217,14 +225,14 @@ export function VoiceRecordButton({ sharedKey, onVoiceReady, disabled = false }:
 
   // ── LOCKED: botones cancelar + enviar ───────────────────────────
   return (
-    <div className="flex items-center gap-2 bg-red-50 rounded-full pl-3 pr-1 py-1 animate-in slide-in-from-right-2 duration-200">
+    <div className="flex-1 min-w-0 flex items-center gap-2 bg-red-50 rounded-full pl-3 pr-1 py-1 animate-in slide-in-from-right-2 duration-200">
       <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
 
-      <span className="text-[14px] font-mono text-red-600 font-medium min-w-[40px]">
+      <span className="text-[14px] font-mono text-red-600 font-medium min-w-[40px] flex-shrink-0">
         {formattedDuration}
       </span>
 
-      <div className="flex items-center gap-[2px] h-6 mx-1">
+      <div className="flex-1 min-w-0 flex items-center justify-end gap-[2px] h-6 mx-1 overflow-hidden">
         {waveformData.slice(-15).map((val, i) => (
           <div
             key={i}

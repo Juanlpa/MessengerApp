@@ -117,6 +117,8 @@ export default function ConversationPage() {
 
   // Responder mensaje
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  // Grabación de voz activa: oculta el input de texto para dar ancho a la barra de voz
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
 
   // Editar mensaje
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -193,8 +195,11 @@ export default function ConversationPage() {
     forceIdle,
     toggleAudio,
     toggleVideo,
+    toggleScreenShare,
     isAudioMuted,
     isVideoMuted,
+    isScreenSharing,
+    isRemoteScreenSharing,
     isAudioOnly,
     isE2EMedia,
     refreshVideoProcessing,
@@ -919,8 +924,11 @@ export default function ConversationPage() {
         onEndCall={endCall}
         onToggleAudio={toggleAudio}
         onToggleVideo={toggleVideo}
+        onToggleScreenShare={toggleScreenShare}
         isAudioMuted={isAudioMuted}
         isVideoMuted={isVideoMuted}
+        isScreenSharing={isScreenSharing}
+        isRemoteScreenSharing={isRemoteScreenSharing}
         isAudioOnly={isAudioOnly}
         isE2EMedia={isE2EMedia}
         token={token || undefined}
@@ -1183,7 +1191,7 @@ export default function ConversationPage() {
               disabled={!sharedKey}
             />
 
-            <div className="flex-1 bg-[#f0f2f5] dark:bg-gray-800 rounded-3xl flex items-center pr-2">
+            <div className={`flex-1 bg-[#f0f2f5] dark:bg-gray-800 rounded-3xl items-center pr-2 ${isRecordingVoice ? 'hidden' : 'flex'}`}>
               <input
                 type="text"
                 value={newMessage}
@@ -1221,6 +1229,7 @@ export default function ConversationPage() {
               <VoiceRecordButton
                 sharedKey={sharedKey}
                 disabled={!sharedKey}
+                onRecordingChange={setIsRecordingVoice}
                 onVoiceReady={async (result) => {
                   if (!token || !sharedKey) return;
                   
@@ -1232,13 +1241,25 @@ export default function ConversationPage() {
                   };
                   const encBlob = new Blob([hexToBytes(result.encryptedData.ciphertext)], { type: 'application/octet-stream' });
 
+                  // MIME real con el que grabó este navegador (webm/ogg/mp4).
+                  // NO hardcodear 'audio/webm': si los bytes son ogg el reproductor
+                  // lanza NotSupportedError ("no supported source").
+                  // Se quita el sufijo ";codecs=opus" porque el validador del servidor
+                  // hace match EXACTO contra la whitelist (audio/webm, audio/ogg).
+                  const rawVoiceMime = result.mimeType || 'audio/webm';
+                  const voiceMime = rawVoiceMime.split(';')[0].trim() || 'audio/webm';
+                  const voiceExt = voiceMime.includes('ogg') ? 'ogg'
+                    : voiceMime.includes('mp4') || voiceMime.includes('mpeg') ? 'm4a'
+                    : 'webm';
+                  const voiceFilename = `voice.${voiceExt}`;
+
                   const formData = new FormData();
                   formData.append('encryptedFile', encBlob, 'voice.enc');
                   formData.append('conversationId', conversationId);
                   formData.append('iv', result.encryptedData.iv);
                   formData.append('macTag', result.encryptedData.mac);
-                  formData.append('mimeType', 'audio/webm');
-                  formData.append('originalFilename', `voice_${Date.now()}.webm`);
+                  formData.append('mimeType', voiceMime);
+                  formData.append('originalFilename', `voice_${Date.now()}.${voiceExt}`);
                   formData.append('sizeBytes', String(result.sizeBytes));
                   formData.append('attachmentType', 'voice');
                   formData.append('durationMs', String(result.durationMs));
@@ -1268,8 +1289,8 @@ export default function ConversationPage() {
                       messageType: 'voice' as const,
                       attachment: {
                         id: uploadData.attachmentId,
-                        filename: 'voice.webm',
-                        mimeType: 'audio/webm',
+                        filename: voiceFilename,
+                        mimeType: voiceMime,
                         sizeBytes: result.sizeBytes,
                         attachmentType: 'voice' as const,
                         durationMs: result.durationMs,
@@ -1296,8 +1317,8 @@ export default function ConversationPage() {
                         messageType: 'voice',
                         attachment: {
                           id: uploadData.attachmentId,
-                          filename: 'voice.webm',
-                          mimeType: 'audio/webm',
+                          filename: voiceFilename,
+                          mimeType: voiceMime,
                           sizeBytes: result.sizeBytes,
                           attachmentType: 'voice' as const,
                           durationMs: result.durationMs,

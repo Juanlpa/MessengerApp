@@ -62,3 +62,54 @@ export function generateDHKeyPairAsync(): Promise<DHKeyPair> {
     worker.postMessage({ action: 'generate' });
   });
 }
+
+/**
+ * Deriva la shared key E2E de forma asíncrona usando un Web Worker.
+ * Ejecuta computeSharedSecret (modPow 2048-bit) + HKDF fuera del main thread.
+ *
+ * Fallback: si Web Workers no están disponibles o fallan, ejecuta síncrono.
+ */
+export function deriveSharedKeyAsync(
+  myPrivateKey: Uint8Array,
+  otherPublicKeyHex: string
+): Promise<Uint8Array> {
+  const fallback = (): Promise<Uint8Array> =>
+    import('@/lib/crypto/key-exchange').then(({ deriveSharedKey }) =>
+      deriveSharedKey(myPrivateKey, otherPublicKeyHex)
+    );
+
+  if (typeof Worker === 'undefined') return fallback();
+
+  return new Promise<Uint8Array>((resolve, reject) => {
+    const worker = new Worker(new URL('./dh-worker.ts', import.meta.url));
+
+    const timeout = setTimeout(() => {
+      worker.terminate();
+      fallback().then(resolve, reject);
+    }, 5000);
+
+    worker.onmessage = (event: MessageEvent) => {
+      clearTimeout(timeout);
+      worker.terminate();
+      if (event.data.success && event.data.sharedKey) {
+        resolve(new Uint8Array(event.data.sharedKey));
+      } else {
+        // Fallback síncrono ante error del worker
+        fallback().then(resolve, reject);
+      }
+    };
+
+    worker.onerror = () => {
+      clearTimeout(timeout);
+      worker.terminate();
+      fallback().then(resolve, reject);
+    };
+
+    // Copiar a un buffer propio para poder transferirlo sin afectar el original
+    const pkCopy = myPrivateKey.slice();
+    worker.postMessage(
+      { action: 'deriveShared', privateKey: pkCopy.buffer, otherPublicKeyHex },
+      [pkCopy.buffer]
+    );
+  });
+}
