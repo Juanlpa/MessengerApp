@@ -26,17 +26,14 @@
 - WebRTC mandates DTLS for key exchange and SRTP for media. Provides transport encryption but NOT end-to-end: media is decrypted at TURN relays.
 - **TURN server used:** `openrelay.metered.ca` (fallback for NAT traversal)
 
-### Insertable Streams / Encoded Transform (Chrome/Edge only)
+### Insertable Streams / Encoded Transform (implementado, actualmente DESACTIVADO)
 - **Spec:** [W3C WebRTC Encoded Transform](https://www.w3.org/TR/webrtc-encoded-transform/)
-- **Algorithm:** AES-GCM 256-bit applied to every encoded **video** frame
-- **Scope — video only:** Frame encryption is applied **only to video tracks**. Audio relies on DTLS-SRTP (transport encryption, always on). Reason: layering AES-GCM over SRTP for audio is redundant, and a key-derivation asymmetry between caller and callee left audio undecodable (silent) on voice calls. Video keeps full E2E frame encryption in 1-to-1 calls. (Group calls disable frame encryption entirely — see `GROUP_CALL_FRAME_ENCRYPTION`.)
-- **Key derivation:** HKDF (SHA-256) using the ECDH shared key as input keying material and `hourIndex = floor(now / 3 600 000)` as salt — both peers independently derive the same key every hour without additional communication
-- **Frame format (video):** `[IV 12 bytes] [AES-GCM ciphertext]`
-- **Key rotation:** `setInterval(1h)` updates all active `KeyContainer` objects in-place, so running TransformStreams pick up the new key on the next frame without being recreated
-- **Hourly key cache:** Both `useWebRTC` and `MeshManager` cache the derived `CryptoKey` keyed by `hourIndex`; HKDF derivation runs at most once per hour per call session. Cache is invalidated on rejection to allow retry.
-- **UI indicator:** `CallModal` shows "E2E Completo" (green shield) on video calls when Insertable Streams is active, and "SRTP Estándar" (yellow) on voice-only calls or when falling back to DTLS-SRTP — honestly reflecting that voice-only media is protected by SRTP, not frame encryption
-- **Screen sharing (1-to-1):** Sharing replaces the camera track on the same `RTCRtpSender` via `replaceTrack()`, so the video frame-encryption transform stays attached — the shared screen is E2E-encrypted exactly like the camera, with no SDP renegotiation
-- **Files:** `src/lib/webrtc/frame-crypto.ts`, `src/lib/webrtc/insertable-streams.ts`
+- **Qué hace:** cifra cada frame de medios con **AES-GCM 256** por encima de SRTP, usando una clave derivada por **HKDF** con `hourIndex = floor(now / 3 600 000)` como salt (ambos peers derivan la misma clave cada hora sin comunicación extra). El `KeyContainer` permite rotar la clave sin recrear los TransformStreams.
+- **Estado actual — DESACTIVADO en todas las llamadas** (`VIDEO_FRAME_ENCRYPTION = false` en 1-a-1, `GROUP_CALL_FRAME_ENCRYPTION = false` en grupos; el audio nunca lo usó). **Motivo:** el cifrado de frames sobre SRTP es **redundante** (SRTP ya cifra el transporte de extremo a extremo entre peers, el TURN solo reenvía paquetes opacos) y provocaba **congelamiento intermitente del decodificador** (si un frame no se descifra a tiempo, el codec pierde sincronía y no se recupera sin keyframe). Se priorizó la **fiabilidad del medio**. El código se conserva y puede reactivarse con el flag.
+- **Protección efectiva del medio:** **DTLS-SRTP**, obligatorio en WebRTC. En topología P2P/mesh el SRTP va de extremo a extremo entre los participantes.
+- **UI indicator:** `CallModal` muestra **"SRTP Estándar"** (cifrado de transporte). Mostraría "E2E Completo" solo si se reactivara el cifrado de frames.
+- **Screen sharing (1-a-1):** se sustituye el track de cámara por el de pantalla en el mismo `RTCRtpSender` vía `replaceTrack()` → mismo nivel de cifrado (SRTP) sin renegociar SDP.
+- **Files:** `src/lib/webrtc/frame-crypto.ts`, `src/lib/webrtc/insertable-streams.ts` (lógica disponible, desactivada por flag)
 
 ---
 
@@ -103,7 +100,7 @@ The original design contemplated a **three-layer encryption model**:
 |--------|-----------|-----|
 | Message interception in transit | AES-GCM E2E + TLS | None for in-transit |
 | Compromise of Supabase DB | Messages stored encrypted; shared keys encrypted with user-derived key | If attacker has user session token AND DB access, they can decrypt |
-| WebRTC media interception at TURN | Insertable Streams E2E (Chrome) | Firefox/Safari: only DTLS-SRTP; media readable at TURN relay |
+| WebRTC media interception at TURN | DTLS-SRTP (transport, end-to-end between peers; TURN relays opaque SRTP packets) | Frame-level E2E (Insertable Streams) implemented but disabled for reliability |
 | Push notification content leak | Web Push Protocol encrypts payload | Browser vendor's push infrastructure is trusted |
 | Replay attack on messages | AES-GCM authentication tag + random IV | No explicit sequence number check |
 | Key rotation gap | HKDF hourly rotation | Both peers must rotate simultaneously; clock skew >1h would break audio/video |
@@ -111,8 +108,7 @@ The original design contemplated a **three-layer encryption model**:
 | Rejected Promise in key cache | Cache cleared on HKDF failure, next call retries | None — fully mitigated |
 | Forward secrecy | Not implemented — shared key is static per conversation | Would require Double Ratchet (Signal Protocol) |
 | Local message exfiltration from device | No plaintext message cache persisted on the client (Layer 3 intentionally omitted — see §7) | None — endpoint stores no message history |
-| Voice-call media interception at TURN | DTLS-SRTP (transport) | Audio is not frame-encrypted; readable at a malicious TURN relay. Video uses Insertable Streams E2E (Chrome) |
-| TURN server trust | OpenRelay (public) used for NAT traversal | For production: use own Coturn with ephemeral HMAC-SHA1 credentials |
+| TURN server trust | Cloudflare TURN; credenciales temporales generadas server-side (`/api/turn-credentials`), el API token nunca llega al navegador. TURN solo reenvía SRTP cifrado | Se confía en la infraestructura de Cloudflare para el relay (no puede leer el medio: va cifrado por SRTP) |
 
 ---
 

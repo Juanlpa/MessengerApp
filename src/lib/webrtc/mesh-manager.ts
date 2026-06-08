@@ -27,6 +27,7 @@ import {
   setupReceiverTransform,
 } from './insertable-streams';
 import { deriveHourlyKey } from './frame-crypto';
+import { buildIceServers, ensureTurnCredentials } from './ice-servers';
 
 export interface MeshParticipant {
   userId: string;
@@ -49,12 +50,9 @@ type OnParticipantsChange = (participants: Map<string, MeshParticipant>) => void
 // shared key DH de la conversación, donde aporta valor y funciona correctamente.
 const GROUP_CALL_FRAME_ENCRYPTION = false;
 
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-];
+// Los ICE servers se construyen AL CREAR cada conexión (buildIceServers()), no
+// aquí, porque las credenciales TURN de Cloudflare se cargan async tras importar
+// el módulo. A nivel de módulo siempre se usaría el fallback (openrelay).
 
 const MAX_VIDEO_PARTICIPANTS = 4;
 const MAX_AUDIO_PARTICIPANTS = 8;
@@ -97,6 +95,9 @@ export class MeshManager {
     }
 
     this.localStream = localStream;
+
+    // Garantizar credenciales TURN (Cloudflare) antes de crear conexiones mesh
+    await ensureTurnCredentials();
 
     // CLAVE DE GRUPO derivada del conversationId (cifrado manual).
     // A diferencia de las llamadas 1-a-1 (que usan la sharedKey DH de la
@@ -265,7 +266,7 @@ export class MeshManager {
   private getOrCreatePeer(peerId: string): RTCPeerConnection {
     if (this.peers.has(peerId)) return this.peers.get(peerId)!;
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({ iceServers: buildIceServers() });
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {

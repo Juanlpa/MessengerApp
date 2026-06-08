@@ -7,6 +7,7 @@ import {
   KeyContainer,
 } from '@/lib/webrtc/insertable-streams';
 import { deriveHourlyKey } from '@/lib/webrtc/frame-crypto';
+import { buildIceServers, ensureTurnCredentials } from '@/lib/webrtc/ice-servers';
 import { startRingtone, stopRingtone as stopRingtoneFn } from '@/lib/audio/ringtone';
 import { useCallStore } from '@/stores/call-store';
 
@@ -33,25 +34,18 @@ interface SignalPayload {
   active?: boolean;
 }
 
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  {
-    urls: 'turn:openrelay.metered.ca:80',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-];
+// NOTA: los ICE servers se construyen AL CREAR cada conexión (buildIceServers()),
+// no aquí a nivel de módulo, porque las credenciales TURN de Cloudflare se cargan
+// de forma asíncrona (loadTurnCredentials) DESPUÉS de importar el módulo. Si se
+// evaluaran aquí, siempre se usaría el fallback (openrelay) y las llamadas entre
+// redes distintas fallarían ("Reconectando").
+
+// Cifrado de frames de video (Insertable Streams). DESACTIVADO: causaba que el
+// decodificador de video se congelara intermitentemente (frame no descifrado a
+// tiempo → el codec pierde sincronía y no se recupera sin keyframe). El video va
+// igualmente cifrado por DTLS-SRTP (transporte, siempre activo en WebRTC).
+// Misma decisión que en grupos (GROUP_CALL_FRAME_ENCRYPTION) y en el audio.
+const VIDEO_FRAME_ENCRYPTION = false;
 
 /** States that show briefly in the UI before the modal auto-closes */
 const TRANSITIONAL_STATES = new Set<CallState>(['ended', 'declined', 'missed', 'failed']);
@@ -131,6 +125,10 @@ export function useWebRTC(
   // Queue for ICE candidates that arrive before setRemoteDescription completes
   // Capped at MAX_PENDING_CANDIDATES to avoid unbounded growth on bad networks
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  // Candidatos ICE LOCALES ya emitidos — se cachean para poder reenviarlos si el
+  // receptor pide la oferta de nuevo (call-request al aceptar desde el banner,
+  // cuando aún no estaba suscrito y se perdió los candidatos enviados antes).
+  const localCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   // Raw getUserMedia stream — separate from localStream (which may be the processed/canvas stream)
   const rawStreamRef = useRef<MediaStream | null>(null);
   // Stream de pantalla compartida (getDisplayMedia) mientras está activa
@@ -146,9 +144,9 @@ export function useWebRTC(
   // Ref a acceptCall para poder auto-aceptar desde el handler de signals.
   const acceptCallRef = useRef<(() => Promise<void>) | null>(null);
 
-  // E2E de frames solo aplica a VIDEO. En llamadas de solo voz el medio va
-  // protegido por SRTP/DTLS (cifrado de transporte), no por cifrado de frames.
-  const isE2EMedia = isInsertableStreamsSupported() && !isAudioOnly;
+  // El cifrado de frames está desactivado (VIDEO_FRAME_ENCRYPTION=false) por
+  // fiabilidad; el medio va protegido por DTLS-SRTP. El badge refleja SRTP.
+  const isE2EMedia = isInsertableStreamsSupported() && VIDEO_FRAME_ENCRYPTION && !isAudioOnly;
 
   const stopRingtone = useCallback(() => stopRingtoneFn(), []);
   const playRingtone = useCallback(() => startRingtone(), []);
@@ -254,21 +252,39 @@ export function useWebRTC(
               audioOnly: isAudioOnlyRef.current,
               callId: callIdRef.current ?? undefined,
             });
+            // Reenviar TODOS los candidatos ICE ya emitidos — el receptor que
+            // acepta desde el banner no estaba suscrito cuando se enviaron y los
+            // perdió. Sin esto, recibe la oferta pero no los candidatos → ICE
+            // nunca empareja ("Reconectando").
+            for (const cand of localCandidatesRef.current) {
+              sendSignal({ type: 'ice-candidate', candidate: cand });
+            }
           }
           return;
         }
 
         if (signal.type === 'offer') {
+          console.log('[WebRTC] OFERTA recibida, callId=', signal.callId, 'audioOnly=', signal.audioOnly); // DIAG
           stopRingtone();
           isAudioOnlyRef.current = signal.audioOnly ?? false;
           setIsAudioOnly(signal.audioOnly ?? false);
-          if (signal.callId) callIdRef.current = signal.callId;
+          // La oferta define el contexto de la llamada: fijar el callId recibido
+          // (o null si no vino). Conservar uno heredado provocaba intentar unirse
+          // a una llamada ajena/inexistente → 500 (FK) / 403.
+          callIdRef.current = signal.callId ?? null;
           setCallStateSafe('receiving');
-          pendingCandidatesRef.current = [];
+          // NO vaciar pendingCandidatesRef aquí: los candidatos ICE del que llama
+          // suelen llegar ANTES que la oferta (se encolan con pc=null). Vaciarlos
+          // aquí los descartaba → la PC quedaba sin candidatos remotos → ICE nunca
+          // emparejaba ("Reconectando"). Se vacían tras aplicarlos (más abajo).
+          // La cola se limpia entre llamadas en cleanup().
+          // Garantizar credenciales TURN (Cloudflare) cargadas antes de crear la PC
+          await ensureTurnCredentials();
           peerConnection.current = createPeerConnection();
           await peerConnection.current.setRemoteDescription(
             new RTCSessionDescription(signal.sdp!)
           );
+          // (createPeerConnection ya se llamó arriba con los ICE servers actuales)
           // Flush any ICE candidates that arrived before remote description was ready
           for (const c of pendingCandidatesRef.current) {
             await peerConnection.current.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
@@ -282,6 +298,7 @@ export function useWebRTC(
             await acceptCallRef.current?.();
           }
         } else if (signal.type === 'answer') {
+          console.log('[WebRTC] RESPUESTA recibida'); // DIAG
           if (peerConnection.current) {
             await peerConnection.current.setRemoteDescription(
               new RTCSessionDescription(signal.sdp!)
@@ -298,13 +315,21 @@ export function useWebRTC(
             await saveCallRecord('connected');
           }
         } else if (signal.type === 'ice-candidate') {
-          if (peerConnection.current && signal.candidate) {
-            const state = peerConnection.current.remoteDescription;
-            if (state) {
-              await peerConnection.current.addIceCandidate(
-                new RTCIceCandidate(signal.candidate)
-              ).catch(() => {});
+          if (signal.candidate) {
+            const pc = peerConnection.current;
+            // DIAG: candidato remoto recibido (tipo + si se añade o encola)
+            const candStr = (signal.candidate as RTCIceCandidateInit).candidate ?? '';
+            const candType = candStr.split(' ')[7] ?? '?';
+            // Solo añadir directamente si la conexión EXISTE y ya tiene remote
+            // description. En cualquier otro caso (PC aún no creada —p.ej. durante
+            // ensureTurnCredentials— o sin remote description todavía) se ENCOLA;
+            // se vacían tras setRemoteDescription. Antes se descartaban los
+            // candidatos que llegaban sin PC, rompiendo ICE en redes rápidas.
+            if (pc && pc.remoteDescription) {
+              console.log('[WebRTC] candidato REMOTO añadido:', candType); // DIAG
+              await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)).catch((e) => console.warn('[WebRTC] addIceCandidate falló', e));
             } else if (pendingCandidatesRef.current.length < MAX_PENDING_CANDIDATES) {
+              console.log('[WebRTC] candidato REMOTO encolado:', candType, '(pc?', !!pc, 'remoteDesc?', !!pc?.remoteDescription, ')'); // DIAG
               pendingCandidatesRef.current.push(signal.candidate);
             }
           }
@@ -383,16 +408,22 @@ export function useWebRTC(
   }, []);
 
   const createPeerConnection = useCallback(() => {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({ iceServers: buildIceServers() });
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        sendSignal({ type: 'ice-candidate', candidate: event.candidate.toJSON() });
+        // DIAG: tipo de candidato local (host/srflx/relay)
+        console.log('[WebRTC] candidato local:', event.candidate.type, event.candidate.protocol, event.candidate.address);
+        const cand = event.candidate.toJSON();
+        localCandidatesRef.current.push(cand); // cachear para posible reenvío
+        sendSignal({ type: 'ice-candidate', candidate: cand });
       }
     };
 
     pc.oniceconnectionstatechange = () => {
       const state = pc.iceConnectionState;
+      console.log('[WebRTC] iceConnectionState =', state); // DIAG
+
       if (state === 'disconnected' || state === 'checking') {
         if (callStateRef.current === 'connected') {
           setCallStateSafe('reconnecting');
@@ -414,7 +445,7 @@ export function useWebRTC(
       // (cifrado de transporte siempre activo). Cifrar el audio con Insertable
       // Streams es redundante y, por una asimetría en la derivación de clave
       // entre quien llama y quien acepta, dejaba el audio ilegible (sin sonido).
-      if (event.track.kind === 'video' && sharedKeyRef.current && isInsertableStreamsSupported()) {
+      if (VIDEO_FRAME_ENCRYPTION && event.track.kind === 'video' && sharedKeyRef.current && isInsertableStreamsSupported()) {
         const hourKey = getHourlyKeySync();
         if (hourKey) {
           try {
@@ -454,8 +485,8 @@ export function useWebRTC(
         const sender = pc.addTrack(track, localStream.current);
         // Guardar el sender de video para poder hacer replaceTrack al cambiar filtros
         if (track.kind === 'video') videoSenderRef.current = sender;
-        // Solo cifrar frames de VIDEO (el audio va por SRTP — ver nota en ontrack)
-        if (track.kind === 'video' && sharedKeyRef.current && isInsertableStreamsSupported()) {
+        // Cifrado de frames de video desactivado (ver VIDEO_FRAME_ENCRYPTION).
+        if (VIDEO_FRAME_ENCRYPTION && track.kind === 'video' && sharedKeyRef.current && isInsertableStreamsSupported()) {
           const hourKey = getHourlyKeySync();
           if (hourKey) {
             try {
@@ -502,6 +533,14 @@ export function useWebRTC(
     const ready = await setupLocalMedia(audioOnly);
     if (!ready) return;
 
+    // Llamada saliente: SIEMPRE empezar con un registro nuevo. Si quedó un
+    // callId heredado (p.ej. de una oferta recibida que no se limpió), enviarlo
+    // a /api/calls daría 403 ("Not authorized", no soy iniciador ni participante)
+    // y la oferta saldría con un callId ajeno. Reset = el registro se crea limpio.
+    callIdRef.current = null;
+    callStartTimeRef.current = null;
+    localCandidatesRef.current = []; // cache de candidatos para esta llamada
+
     isAudioOnlyRef.current = audioOnly;
     setIsAudioOnly(audioOnly);
     setCallStateSafe('calling');
@@ -513,6 +552,8 @@ export function useWebRTC(
       try { await getHourlyKey(sharedKeyRef.current); } catch {}
     }
 
+    // Garantizar credenciales TURN (Cloudflare) cargadas antes de crear la PC
+    await ensureTurnCredentials();
     peerConnection.current = createPeerConnection();
 
     const offer = await peerConnection.current.createOffer();
@@ -564,8 +605,8 @@ export function useWebRTC(
     for (const track of localStream.current!.getTracks()) {
       const sender = currentPc!.addTrack(track, localStream.current!);
       if (track.kind === 'video') videoSenderRef.current = sender;
-      // Solo cifrar frames de VIDEO (el audio va por SRTP — ver nota en ontrack)
-      if (track.kind === 'video' && sharedKeyRef.current && isInsertableStreamsSupported() && hourKey) {
+      // Cifrado de frames de video desactivado (ver VIDEO_FRAME_ENCRYPTION).
+      if (VIDEO_FRAME_ENCRYPTION && track.kind === 'video' && sharedKeyRef.current && isInsertableStreamsSupported() && hourKey) {
         try {
           const container = setupSenderTransform(sender, hourKey);
           keyContainersRef.current.push(container);
@@ -678,6 +719,8 @@ export function useWebRTC(
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current = null;
     remoteStream.current = null;
+    pendingCandidatesRef.current = []; // limpiar candidatos ICE entre llamadas
+    localCandidatesRef.current = [];
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     callIdRef.current = null;

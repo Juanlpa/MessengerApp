@@ -12,6 +12,15 @@ function GlobalCallListenerWrapper({ userId, children }: { userId: string; child
   useGlobalCallListener(userId);
   usePushNotifications();
 
+  // Cargar credenciales TURN dinámicas (Metered) una vez al entrar a la app,
+  // para que estén listas antes de cualquier llamada. Si no hay config, usa
+  // el fallback (STUN + openrelay) sin romper nada.
+  useEffect(() => {
+    import('@/lib/webrtc/ice-servers').then(({ loadTurnCredentials }) => {
+      loadTurnCredentials();
+    }).catch(() => {});
+  }, []);
+
   // Al conectarse a la app, marcar como "entregados" todos los mensajes
   // recibidos mientras estaba offline (aunque no abra cada chat) — así el
   // remitente ve ✓✓ en tiempo real, como WhatsApp.
