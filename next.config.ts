@@ -49,6 +49,9 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   compress: true,
+  // No revelar el framework en la cabecera (evita "Server Leaks Information
+  // via X-Powered-By" — fingerprinting). Quita el header `X-Powered-By: Next.js`.
+  poweredByHeader: false,
   // Permite que el dev server acepte peticiones desde túneles HTTPS
   // (cloudflared / ngrok) al probar desde el celular. Solo afecta a `next dev`.
   allowedDevOrigins: [
