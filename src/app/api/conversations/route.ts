@@ -155,14 +155,28 @@ export async function POST(request: NextRequest) {
 
     if (myConvs && myConvs.length > 0) {
       const myConvIds = myConvs.map((c: { conversation_id: string }) => c.conversation_id);
-      const { data: shared } = await supabase
-        .from('conversation_participants')
-        .select('conversation_id')
-        .eq('user_id', otherUserId)
-        .in('conversation_id', myConvIds)
-        .limit(1);
-      if (shared && shared.length > 0) {
-        return NextResponse.json({ conversationId: shared[0].conversation_id });
+
+      // IMPORTANTE: solo considerar conversaciones 1-a-1 (excluir GRUPOS). Si no,
+      // como dos usuarios pueden compartir un grupo, se detectaría el grupo como
+      // "conversación existente" y al pulsar el contacto se abriría el grupo en
+      // vez de crear/abrir el chat 1-a-1.
+      const { data: oneToOne } = await supabase
+        .from('conversations')
+        .select('id')
+        .in('id', myConvIds)
+        .eq('is_group', false);
+      const oneToOneIds = (oneToOne ?? []).map((c: { id: string }) => c.id);
+
+      if (oneToOneIds.length > 0) {
+        const { data: shared } = await supabase
+          .from('conversation_participants')
+          .select('conversation_id')
+          .eq('user_id', otherUserId)
+          .in('conversation_id', oneToOneIds)
+          .limit(1);
+        if (shared && shared.length > 0) {
+          return NextResponse.json({ conversationId: shared[0].conversation_id });
+        }
       }
     }
 

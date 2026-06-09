@@ -80,6 +80,16 @@ export function useConversations(showArchived = false) {
     return () => window.removeEventListener('conversations:refresh', onRefresh);
   }, []);
 
+  // Polling de respaldo: el realtime solo escucha INSERT de mensajes. Ser añadido
+  // a un grupo o a un chat nuevo es un cambio en conversation_participants (no un
+  // mensaje), que el realtime con auth propia no entrega. Recargar cada 10s hace
+  // que un grupo/chat nuevo aparezca solo. Solo en la lista principal.
+  useEffect(() => {
+    if (showArchived) return;
+    const interval = setInterval(() => loadRef.current(), 10000);
+    return () => clearInterval(interval);
+  }, [showArchived]);
+
   // Set de ids de mis conversaciones (para filtrar eventos ajenos)
   const myConvIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
