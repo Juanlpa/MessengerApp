@@ -29,6 +29,7 @@ import { GroupSettings } from '@/components/groups/GroupSettings';
 import { refreshConversations } from '@/hooks/useConversations';
 import { displayUsername, isDeletedUser } from '@/lib/utils/user-display';
 import { useUnreadStore } from '@/stores/unread-store';
+import { useContacts } from '@/hooks/useContacts';
 
 // Componentes de adjuntos y voz (develop)
 import { AttachmentButton } from '@/components/chat/AttachmentButton';
@@ -95,6 +96,8 @@ export default function ConversationPage() {
   const user = useAuthStore(s => s.user);
   const token = useAuthStore(s => s.token);
   const cachedStorageKey = useAuthStore(s => s.storageKey);
+  // Lista de amigos — para avisar si quien llama NO es un contacto registrado
+  const { contacts: myContacts, loading: contactsLoading } = useContacts();
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
@@ -939,6 +942,7 @@ export default function ConversationPage() {
         isVideoMuted={isVideoMuted}
         isScreenSharing={isScreenSharing}
         isRemoteScreenSharing={isRemoteScreenSharing}
+        callerIsContact={(!otherUserId || contactsLoading) ? undefined : myContacts.some(c => c.friend?.id === otherUserId)}
         isAudioOnly={isAudioOnly}
         isE2EMedia={isE2EMedia}
         token={token || undefined}

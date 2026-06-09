@@ -28,6 +28,8 @@ interface CallModalProps {
   isVideoMuted: boolean;
   isScreenSharing?: boolean;
   isRemoteScreenSharing?: boolean;
+  /** true = el que llama es contacto; false = NO está en contactos; undefined = desconocido */
+  callerIsContact?: boolean;
   isAudioOnly?: boolean;
   isE2EMedia?: boolean;
   token?: string;
@@ -101,6 +103,7 @@ export function CallModal({
   isVideoMuted,
   isScreenSharing = false,
   isRemoteScreenSharing = false,
+  callerIsContact,
   isAudioOnly = false,
   isE2EMedia = false,
   token,
@@ -415,6 +418,14 @@ export function CallModal({
           <div className="text-center pointer-events-none">
             <h2 className="text-xl sm:text-2xl font-bold text-white drop-shadow-md">{otherUsername}</h2>
             <p className="text-xs sm:text-sm text-gray-300 drop-shadow-md">{statusLabel}</p>
+
+            {/* Aviso: llamada entrante de alguien que NO está en tus contactos */}
+            {callState === 'receiving' && callerIsContact === false && (
+              <div className="inline-flex items-center gap-1.5 mt-2 px-3 py-1 rounded-full text-xs font-semibold bg-red-600/80 text-white">
+                <ShieldAlert className="w-3.5 h-3.5" />
+                Contacto no registrado en tu lista de contactos
+              </div>
+            )}
 
             {/* E2E / SRTP security badge */}
             {(callState === 'connected' || callState === 'reconnecting') && (

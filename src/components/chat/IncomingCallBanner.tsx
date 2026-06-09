@@ -6,11 +6,13 @@ import { useCallStore } from '@/stores/call-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { startRingtone, stopRingtone } from '@/lib/audio/ringtone';
 import { supabase } from '@/lib/supabase/client';
+import { useContacts } from '@/hooks/useContacts';
 
 export function IncomingCallBanner() {
   const router = useRouter();
   const { incomingCall, clearIncomingCall } = useCallStore();
   const user = useAuthStore(s => s.user);
+  const { contacts, loading: contactsLoading } = useContacts();
 
   useEffect(() => {
     if (incomingCall) {
@@ -22,6 +24,11 @@ export function IncomingCallBanner() {
   }, [incomingCall]);
 
   if (!incomingCall) return null;
+
+  // ¿El que llama está en mis contactos? (solo aplica a llamadas 1-a-1)
+  const callerIsContact = contactsLoading
+    ? undefined
+    : contacts.some(c => c.friend?.id === incomingCall.callerId);
 
   const handleAccept = () => {
     if (incomingCall.isGroupCall) {
@@ -77,6 +84,11 @@ export function IncomingCallBanner() {
         <p className="text-[#65676b] text-[13px]">
           {incomingCall.isAudioOnly ? '📞 Llamada de voz' : '🎥 Videollamada'}
         </p>
+        {!incomingCall.isGroupCall && callerIsContact === false && (
+          <p className="text-red-600 text-[12px] font-semibold mt-0.5">
+            ⚠️ Contacto no registrado en tu lista
+          </p>
+        )}
       </div>
 
       {/* Botones */}
