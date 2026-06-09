@@ -13,10 +13,16 @@
  * Si no están configuradas, devuelve { iceServers: null } y el cliente usa su
  * fallback (STUN + openrelay).
  */
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
+import { getUserFromRequest } from '@/lib/auth/get-user';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  // Requiere sesión: evita que terceros sin login generen credenciales TURN
+  // (relay) y consuman la cuota de Cloudflare con tráfico arbitrario.
+  const user = getUserFromRequest(request);
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const keyId = process.env.CLOUDFLARE_TURN_KEY_ID?.trim();
   const apiToken = process.env.CLOUDFLARE_TURN_API_TOKEN?.trim();
 

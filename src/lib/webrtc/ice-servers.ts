@@ -31,7 +31,12 @@ let loadPromise: Promise<void> | null = null;
 
 export async function loadTurnCredentials(): Promise<void> {
   try {
-    const res = await fetch('/api/turn-credentials', { cache: 'no-store' });
+    // El endpoint requiere sesión → enviar el JWT guardado.
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const res = await fetch('/api/turn-credentials', {
+      cache: 'no-store',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
     if (!res.ok) return;
     const data = await res.json();
     if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {

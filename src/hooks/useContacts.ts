@@ -85,6 +85,14 @@ export function useContacts() {
     return () => { supabase.removeChannel(channel); };
   }, [user?.id]);
 
+  // Polling de respaldo: el realtime de postgres_changes no se entrega de forma
+  // fiable con auth propia (RLS usa auth.uid() de Supabase, que es null aquí), así
+  // que refrescamos la lista cada 10s para que un amigo nuevo aparezca solo.
+  useEffect(() => {
+    const interval = setInterval(() => fetchRef.current(), 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   return { contacts, loading, error, refetch: fetchContacts };
 }
 
@@ -145,6 +153,13 @@ export function usePendingRequests() {
     return () => { supabase.removeChannel(channel); };
   }, [user?.id]);
 
+  // Polling de respaldo (ver nota en useContacts): garantiza que el badge de
+  // solicitudes aparezca solo aunque el realtime no entregue por RLS/auth propia.
+  useEffect(() => {
+    const interval = setInterval(() => fetchPendingRef.current(), 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   return { requests, loading, refetch: fetchPending };
 }
 
@@ -167,6 +182,13 @@ export function useSentRequests() {
   }, [token]);
 
   useEffect(() => { fetchSent(); }, [fetchSent]);
+
+  const fetchSentRef = useRef(fetchSent);
+  useEffect(() => { fetchSentRef.current = fetchSent; }, [fetchSent]);
+  useEffect(() => {
+    const interval = setInterval(() => fetchSentRef.current(), 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   return { requests, loading, refetch: fetchSent };
 }

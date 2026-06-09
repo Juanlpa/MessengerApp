@@ -128,11 +128,36 @@ necesitan `unsafe-eval` y orígenes amplios); en **producción se endurece**:
   fetch/WebSocket, así que no necesita entrada en `connect-src`.
 
 ### Hallazgos aceptados (con justificación)
-- **`script-src`/`style-src 'unsafe-inline'`:** lo requiere **Next.js/React** (scripts de
-  hidratación y estilos inyectados por Tailwind/styled-jsx). El "arreglo" correcto es una CSP
-  basada en **nonces + `strict-dynamic`**, que en App Router es compleja y frágil; se acepta
-  como limitación conocida del framework. Riesgo XSS mitigado además por: no usar
-  `dangerouslySetInnerHTML`, escape por defecto de React, y sanitización de entradas.
+
+**`script-src` / `style-src 'unsafe-inline'` — NO es una vulnerabilidad explotable en esta app.**
+
+La alerta de ZAP es una recomendación de *defensa en profundidad* (una capa de mitigación
+de XSS que "podría ser más estricta"), **no un fallo explotable**. ZAP la marca como Medium de
+forma genérica en *cualquier* sitio cuyo CSP contenga `unsafe-inline`, sin comprobar si el sitio
+es realmente vulnerable a XSS.
+
+`unsafe-inline` solo sería peligroso **si existiera un punto de inyección XSS** que permitiera
+meter un `<script>`/`<style>` malicioso. En esta app **no lo hay**:
+- **React escapa todo por defecto:** el contenido de usuario se renderiza como texto, no como
+  HTML. **No se usa `dangerouslySetInnerHTML` en ningún sitio del código.**
+- El contenido de los mensajes va **cifrado E2E** (es ciphertext hasta que el cliente lo
+  descifra y React lo escapa al mostrarlo).
+- Las entradas se validan/sanitizan en el servidor.
+
+Es decir: el riesgo (XSS) está **mitigado en el origen**; `unsafe-inline` sería la *última* línea
+de defensa para un ataque que las *primeras* líneas ya impiden.
+
+Además, el resto del CSP **sí aporta protección real** y limita el daño aunque algo se inyectara:
+`default-src 'self'`, `script-src` sin comodines ni `unsafe-eval` (no se cargan scripts externos
+ni se permite `eval`), `connect-src` restringido a Supabase (no se puede exfiltrar datos a un
+dominio atacante), `object-src 'none'`, `frame-ancestors 'none'` (anti-clickjacking),
+`base-uri 'self'`, `form-action 'self'`.
+
+Por qué no se "arregla": es un **requisito inherente de Next.js/React** (scripts de hidratación
+inline + estilos dinámicos inline como las waveforms y colores por chat). El arreglo correcto
+(CSP con **nonces + `strict-dynamic`**) es complejo y frágil en App Router, y el `style-src` no
+puede eliminarse sin refactorizar todos los estilos dinámicos. Es una limitación aceptada por la
+industria (incluso sitios de Vercel la tienen).
 - **`Access-Control-Allow-Origin: *` en `/_next/static/*`:** lo añade **Vercel** a los assets
   estáticos públicos (JS/CSS inmutables, sin credenciales ni datos sensibles). Es el
   comportamiento estándar de la CDN y no expone APIs autenticadas (esas van por `/api/*` con
