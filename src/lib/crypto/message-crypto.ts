@@ -47,3 +47,33 @@ export function getServerMasterKey(): Uint8Array {
   }
   return fromHex(keyHex);
 }
+
+/**
+ * Limpia y formatea texto que contiene representaciones E2E de adjuntos (file, image, voice)
+ * a un formato amigable para el usuario.
+ */
+export function cleanAttachmentText(text: string): string {
+  if (!text) return '';
+
+  const trimmed = text.trim();
+  const regex = /^(\[Reenviado\]\s+)?\[(file|image|voice):[^\]]+\]\s*(.*)$/i;
+  const match = trimmed.match(regex);
+
+  if (match) {
+    const isForwarded = match[1] || '';
+    const type = match[2].toLowerCase();
+    const rest = match[3].trim();
+
+    if (type === 'file') {
+      return `${isForwarded}📄 ${rest || 'Archivo'}`;
+    }
+    if (type === 'image') {
+      return `${isForwarded}📷 ${rest || 'Foto'}`;
+    }
+    if (type === 'voice') {
+      return `${isForwarded}🎤 Mensaje de voz`;
+    }
+  }
+
+  return text;
+}

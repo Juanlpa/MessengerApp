@@ -7,7 +7,6 @@
 
 import { pbkdf2 } from '../crypto/pbkdf2';
 import { sha256 } from '../crypto/sha256';
-import { generateDHKeyPair } from '../crypto/dh';
 import { toHex, randomBytes } from '../crypto/utils';
 import type { DHKeyPair } from '../crypto/dh';
 
@@ -30,14 +29,14 @@ export interface RegistrationSecrets {
  * Prepara los datos de registro del lado del cliente.
  * 1. Genera salt aleatorio
  * 2. Deriva hash con PBKDF2
- * 3. Genera par de claves DH
+ * 3. Genera par de claves DH (en Web Worker para no bloquear main thread)
  * 4. Retorna datos para enviar al servidor + secretos para guardar en memoria
  */
-export function prepareRegistration(
+export async function prepareRegistration(
   email: string,
   username: string,
   password: string
-): { data: RegistrationData; secrets: RegistrationSecrets } {
+): Promise<{ data: RegistrationData; secrets: RegistrationSecrets }> {
   // 1. Generar salt aleatorio (16 bytes = 128 bits)
   const salt = randomBytes(16);
   const saltHex = toHex(salt);
@@ -49,8 +48,15 @@ export function prepareRegistration(
   // (no enviamos el derived key directamente, enviamos su hash)
   const passwordHash = sha256(passwordDerivedKey);
 
-  // 4. Generar par de claves DH
-  const dhKeyPair = generateDHKeyPair();
+  // 4. Generar par de claves DH en Web Worker (non-blocking)
+  let dhKeyPair: DHKeyPair;
+  if (typeof window !== 'undefined') {
+    const { generateDHKeyPairAsync } = await import('@/workers/dh-worker-client');
+    dhKeyPair = await generateDHKeyPairAsync();
+  } else {
+    const { generateDHKeyPair } = await import('../crypto/dh');
+    dhKeyPair = generateDHKeyPair();
+  }
 
   return {
     data: {
@@ -90,5 +96,72 @@ export function prepareLogin(
   return {
     passwordHash: toHex(passwordHash),
     passwordDerivedKey,
+  };
+}
+
+/**
+ * Prepara datos para cambiar contraseña en el cliente.
+ * NO envía la contraseña al servidor: deriva hashes localmente.
+ *
+ * @param currentPassword - contraseña actual (en claro, solo se usa localmente)
+ * @param newPassword - nueva contraseña (en claro, solo se usa localmente)
+ * @param currentSalt - salt actual del usuario (hex), obtenida del servidor
+ *
+ * Retorna lo que se enviará al servidor + secrets para actualizar storage local.
+ */
+export function prepareChangePassword(
+  currentPassword: string,
+  newPassword: string,
+  currentSalt: string
+): {
+  currentPasswordHash: string;
+  newPasswordHash: string;
+  newSalt: string;
+  newPasswordDerivedKey: Uint8Array;
+} {
+  const { fromHex } = require('../crypto/utils');
+
+  // Hash de la contraseña actual con la salt actual
+  const currentSaltBytes = fromHex(currentSalt);
+  const currentDerivedKey = pbkdf2(currentPassword, currentSaltBytes, PBKDF2_ITERATIONS, 32);
+  const currentPasswordHash = toHex(sha256(currentDerivedKey));
+
+  // Nueva salt aleatoria
+  const newSalt = randomBytes(16);
+  const newSaltHex = toHex(newSalt);
+
+  // Hash de la nueva contraseña con la salt nueva
+  const newPasswordDerivedKey = pbkdf2(newPassword, newSalt, PBKDF2_ITERATIONS, 32);
+  const newPasswordHash = toHex(sha256(newPasswordDerivedKey));
+
+  return {
+    currentPasswordHash,
+    newPasswordHash,
+    newSalt: newSaltHex,
+    newPasswordDerivedKey,
+  };
+}
+
+/**
+ * Prepara datos para reset-password (sin contraseña actual; se autoriza con token de email).
+ * @param newPassword - nueva contraseña (en claro, solo se usa localmente)
+ *
+ * Retorna lo que se enviará al servidor junto con el token de reset.
+ */
+export function prepareResetPassword(newPassword: string): {
+  newPasswordHash: string;
+  newSalt: string;
+  newPasswordDerivedKey: Uint8Array;
+} {
+  const newSalt = randomBytes(16);
+  const newSaltHex = toHex(newSalt);
+
+  const newPasswordDerivedKey = pbkdf2(newPassword, newSalt, PBKDF2_ITERATIONS, 32);
+  const newPasswordHash = toHex(sha256(newPasswordDerivedKey));
+
+  return {
+    newPasswordHash,
+    newSalt: newSaltHex,
+    newPasswordDerivedKey,
   };
 }

@@ -7,8 +7,9 @@
 
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { createClient, RealtimeChannel } from '@supabase/supabase-js';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { RealtimeChannel } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabase/client';
 
 interface PresenceState {
   [userId: string]: {
@@ -17,22 +18,19 @@ interface PresenceState {
   };
 }
 
-function getRealtimeClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) throw new Error('Missing Supabase env vars');
-  return createClient(url, anonKey);
-}
-
 export function usePresence(userId: string, username: string) {
   const [onlineUsers, setOnlineUsers] = useState<PresenceState>({});
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const supabaseRef = useRef(getRealtimeClient());
 
   useEffect(() => {
     if (!userId) return;
 
-    const supabase = supabaseRef.current;
+    // Con cliente compartido, el canal puede ya existir suscrito (React Strict Mode / re-renders).
+    // Eliminarlo antes de crear uno nuevo evita el error "cannot add callbacks after subscribe()".
+    supabase.getChannels()
+      .filter(ch => ch.topic === 'realtime:presence:global')
+      .forEach(ch => supabase.removeChannel(ch));
+
     const channel = supabase.channel('presence:global', {
       config: { presence: { key: userId } },
     });
@@ -85,19 +83,24 @@ export function usePresence(userId: string, username: string) {
     channelRef.current = channel;
 
     // Actualizar last_seen periódicamente (heartbeat cada 30s)
+    let isTracking = false;
     const heartbeat = setInterval(async () => {
-      if (channelRef.current) {
-        await channelRef.current.track({
-          user_id: userId,
-          username,
-          online_at: new Date().toISOString(),
-        });
+      if (channelRef.current && !isTracking) {
+        isTracking = true;
+        try {
+          await channelRef.current.track({
+            user_id: userId,
+            username,
+            online_at: new Date().toISOString(),
+          });
+        } finally {
+          isTracking = false;
+        }
       }
     }, 30_000);
 
     return () => {
       clearInterval(heartbeat);
-      channel.unsubscribe();
       supabase.removeChannel(channel);
     };
   }, [userId, username]);
@@ -105,9 +108,9 @@ export function usePresence(userId: string, username: string) {
   /**
    * Verifica si un usuario específico está online
    */
-  const isUserOnline = (targetUserId: string): boolean => {
+  const isUserOnline = useCallback((targetUserId: string): boolean => {
     return onlineUsers[targetUserId]?.isOnline ?? false;
-  };
+  }, [onlineUsers]);
 
   return { onlineUsers, isUserOnline };
 }

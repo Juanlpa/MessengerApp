@@ -291,32 +291,42 @@ src/lib/security/sanitize.ts
 
 ---
 
-## FASE 20 — Tests, SonarQube, Burp Suite, npm audit
+## FASE 20 — Tests, OWASP ZAP, Burp Suite, npm audit
 
-**Objetivo:** Cobertura de tests ≥60%, 0 vulnerabilidades críticas.
+**Objetivo:** Cobertura de tests ≥60%, 0 vulnerabilidades high/critical en análisis de seguridad.
 
 **Prerrequisitos:** Todas las fases funcionales
 
 **Tareas:**
-1. Tests unitarios para cada módulo cripto (ya hechos en Fase 1, verificar cobertura)
+1. Verificar cobertura de tests unitarios del módulo cripto (Fase 1)
 2. Tests unitarios para API routes (auth, messages, contacts, conversations)
 3. Tests de integración para flujo E2E de triple cifrado
 4. Tests de componentes React con Testing Library
-5. Configurar SonarQube local, correr análisis, corregir hasta ≤3 issues info/minor
-6. Correr `npm audit` → resolver todas las vulnerabilidades high/critical
-7. Documentar resultados de Burp Suite scan (manual, lo corren ustedes)
+5. Instalar y correr OWASP ZAP Community:
+   - Baseline scan contra la app corriendo localmente
+   - Documentar hallazgos en `docs/owasp-report.md`
+   - Corregir todas las vulnerabilidades high/critical
+   - Re-scan para confirmar corrección
+6. Correr Burp Suite Community (manual):
+   - Configurar proxy en navegador
+   - Interceptar y analizar tráfico de la app
+   - Probar manipulación de requests, replay attacks, fuzzing
+   - Intentar bypasses de RLS y auth
+   - Documentar hallazgos en `docs/burpsuite-report.md`
+7. Correr `npm audit` → resolver todas las vulnerabilidades high/critical
 8. Generar reporte de cobertura con Jest
 
 **Archivos:**
 ```
 jest.config.ts
 src/**/__tests__/                      # todos los test files
-docs/security-report.md
-docs/sonarqube-results.md
+docs/owasp-report.md                   # resultados OWASP ZAP baseline scan
+docs/burpsuite-report.md               # resultados Burp Suite (manual)
+docs/security-report.md               # resumen ejecutivo de seguridad
 docs/test-coverage.md
 ```
 
-**Criterios:** `npm test` pasa. Cobertura ≥60%. SonarQube ≤3 minor. npm audit 0 high/critical.
+**Criterios:** `npm test` pasa. Cobertura ≥60%. OWASP ZAP: 0 vulnerabilidades high/critical. Burp Suite: sin issues críticos documentados. npm audit: 0 high/critical.
 
 **Complejidad:** Alta
 
