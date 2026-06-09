@@ -12,6 +12,7 @@ import { sendResetEmail } from '@/lib/email/sendResetEmail';
 import { checkRateLimit } from '@/lib/auth/rateLimit';
 import { logSecurityEvent } from '@/lib/auth/securityLogs';
 import { getClientIp, getUserAgent } from '@/lib/auth/request-info';
+import { deobfuscateEmail } from '@/lib/auth/email-obfuscation';
 
 // Respuesta uniforme para no revelar si un email está o no registrado
 const UNIFORM_OK = { message: 'Si el email existe, te enviamos un correo con instrucciones.' };
@@ -34,10 +35,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { email } = await request.json();
-    if (!email || typeof email !== 'string') {
+    const { email: rawEmail } = await request.json();
+    if (!rawEmail || typeof rawEmail !== 'string') {
       return NextResponse.json(UNIFORM_OK);
     }
+    const email = deobfuscateEmail(rawEmail);
 
     const supabase = getSupabaseAdmin();
     const { data: user } = await supabase

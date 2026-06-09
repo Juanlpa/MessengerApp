@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { obfuscateEmail } from '@/lib/auth/email-obfuscation';
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
@@ -20,7 +21,7 @@ export default function ForgotPasswordPage() {
       const res = await fetch('/api/auth/reset-password/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email: obfuscateEmail(email) }),
       });
       const data = await res.json();
       setMsg(data.message || data.error || 'Listo.');

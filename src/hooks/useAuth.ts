@@ -8,6 +8,7 @@ import { useCallback, useEffect } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { prepareRegistration, prepareLogin } from '@/lib/auth/client-auth';
 import { pbkdf2 } from '@/lib/crypto/pbkdf2';
+import { obfuscateEmail } from '@/lib/auth/email-obfuscation';
 
 export function useAuth() {
   const { user, token, isLoading, setAuth, setKeys, logout, setLoading } = useAuthStore();
@@ -37,7 +38,7 @@ export function useAuth() {
     const saltRes = await fetch('/api/auth/salt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email: obfuscateEmail(email) }),
     });
 
     if (!saltRes.ok) throw new Error('Failed to get salt');
@@ -50,7 +51,7 @@ export function useAuth() {
     const loginRes = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, passwordHash }),
+      body: JSON.stringify({ email: obfuscateEmail(email), passwordHash }),
     });
 
     if (!loginRes.ok) {
@@ -76,11 +77,11 @@ export function useAuth() {
     // Cripto del lado del cliente (async: DH key pair se genera en Web Worker)
     const { data, secrets } = await prepareRegistration(email, username, password);
 
-    // Enviar al servidor (password NUNCA sale en claro)
+    // Enviar al servidor (password NUNCA sale en claro; email ofuscado)
     const res = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({ ...data, email: obfuscateEmail(data.email) }),
     });
 
     if (!res.ok) {

@@ -13,6 +13,7 @@
 import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
+import { deobfuscateEmail } from '@/lib/auth/email-obfuscation';
 
 /**
  * Genera una salt determinística a partir del email para que el mismo email
@@ -30,10 +31,11 @@ function fakeSaltFor(email: string): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const { email } = await request.json();
-    if (!email || typeof email !== 'string') {
+    const { email: rawEmail } = await request.json();
+    if (!rawEmail || typeof rawEmail !== 'string') {
       return NextResponse.json({ error: 'Email requerido' }, { status: 400 });
     }
+    const email = deobfuscateEmail(rawEmail);
 
     const supabase = getSupabaseAdmin();
     const { data: user } = await supabase

@@ -17,6 +17,7 @@ import { checkRateLimit, saveAttempt } from '@/lib/auth/rateLimit';
 import { logSecurityEvent } from '@/lib/auth/securityLogs';
 import { createSession } from '@/lib/auth/sessionManager';
 import { getClientIp, getUserAgent } from '@/lib/auth/request-info';
+import { deobfuscateEmail } from '@/lib/auth/email-obfuscation';
 
 interface UserRow {
   id: string;
@@ -45,7 +46,8 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { email, passwordHash } = body;
+    const { email: rawEmail, passwordHash } = body;
+    const email = deobfuscateEmail(rawEmail);
 
     if (!email || !passwordHash) {
       await saveAttempt(email || '', ip, false);

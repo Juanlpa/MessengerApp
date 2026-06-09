@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth-store';
 import { prepareChangePassword } from '@/lib/auth/client-auth';
+import { obfuscateEmail } from '@/lib/auth/email-obfuscation';
 
 export default function ChangePasswordPage() {
   const router = useRouter();
@@ -41,7 +42,7 @@ export default function ChangePasswordPage() {
       const saltRes = await fetch('/api/auth/salt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email }),
+        body: JSON.stringify({ email: obfuscateEmail(user.email) }),
       });
       if (!saltRes.ok) {
         setMessage('No se pudo obtener tu salt.');

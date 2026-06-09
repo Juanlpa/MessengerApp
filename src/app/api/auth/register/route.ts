@@ -13,6 +13,7 @@ import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { checkRateLimit, saveAttempt } from '@/lib/auth/rateLimit';
 import { logSecurityEvent } from '@/lib/auth/securityLogs';
 import { getClientIp, getUserAgent } from '@/lib/auth/request-info';
+import { deobfuscateEmail } from '@/lib/auth/email-obfuscation';
 
 export async function POST(request: NextRequest) {
   const ip = getClientIp(request);
@@ -33,7 +34,8 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { email, username, passwordHash, salt, dhPublicKey } = body;
+    const { email: rawEmail, username, passwordHash, salt, dhPublicKey } = body;
+    const email = deobfuscateEmail(rawEmail);
 
     if (!email || !username || !passwordHash || !salt || !dhPublicKey) {
       await saveAttempt(email || '', ip, false);
