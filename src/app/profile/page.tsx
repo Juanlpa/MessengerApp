@@ -255,6 +255,21 @@ export default function ProfilePage() {
             <span className="text-gray-400">›</span>
           </Link>
 
+          {user?.role === 'admin' && (
+            <Link
+              href="/admin"
+              className="flex items-center justify-between w-full bg-[#0084ff]/10 dark:bg-[#0084ff]/15 hover:bg-[#0084ff]/20 text-[#0084ff] rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors"
+            >
+              <span className="flex items-center gap-2">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+                Panel de administración
+              </span>
+              <span className="text-[#0084ff]/60">›</span>
+            </Link>
+          )}
+
           <Link
             href="/settings"
             className="flex items-center justify-between w-full bg-[#f0f2f5] dark:bg-gray-800 hover:bg-[#e4e6eb] dark:hover:bg-gray-700 text-gray-900 dark:text-white rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"

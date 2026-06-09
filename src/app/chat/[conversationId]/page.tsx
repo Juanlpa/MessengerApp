@@ -27,6 +27,7 @@ import { useThemeStore } from '@/stores/theme-store';
 import { useGroupDetail } from '@/hooks/useGroups';
 import { GroupSettings } from '@/components/groups/GroupSettings';
 import { refreshConversations } from '@/hooks/useConversations';
+import { displayUsername, isDeletedUser } from '@/lib/utils/user-display';
 
 // Componentes de adjuntos y voz (develop)
 import { AttachmentButton } from '@/components/chat/AttachmentButton';
@@ -93,6 +94,8 @@ export default function ConversationPage() {
   const [sending, setSending] = useState(false);
   const [otherUsername, setOtherUsername] = useState('');
   const [otherUserId, setOtherUserId] = useState('');
+  // El otro participante es una cuenta eliminada → bloquear interacción (1-a-1)
+  const [isOtherDeleted, setIsOtherDeleted] = useState(false);
   const [isGroup, setIsGroup] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [sharedKey, setSharedKey] = useState<Uint8Array | null>(null);
@@ -496,8 +499,9 @@ export default function ConversationPage() {
       const isGroupConv = conv.isGroup || false;
       setIsGroup(isGroupConv);
       setGroupName(conv.groupName || '');
-      setOtherUsername(conv.otherUser?.username || '');
+      setOtherUsername(displayUsername(conv.otherUser?.username));
       setOtherUserId(conv.otherUser?.id || '');
+      setIsOtherDeleted(!conv.isGroup && isDeletedUser(conv.otherUser?.username));
 
       let resolvedSharedKey: Uint8Array;
 
@@ -1023,7 +1027,7 @@ export default function ConversationPage() {
             </div>
           </div>
           </div>
-          {!isGroup && (
+          {!isGroup && !isOtherDeleted && (
             <>
               <button
                 onClick={() => initiateCall(true)}
@@ -1173,6 +1177,16 @@ export default function ConversationPage() {
 
         {/* Input de mensaje */}
         <div className="p-3 bg-white dark:bg-gray-900 border-t border-[#e4e6eb] dark:border-gray-800">
+          {isOtherDeleted ? (
+            <div className="flex items-center justify-center gap-2 py-2.5 text-[#65676b] dark:text-gray-400 text-[13px]">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+              Esta cuenta fue eliminada. No puedes enviar mensajes ni llamar.
+            </div>
+          ) : (
+          <>
           {/* Preview de respuesta */}
           {replyTo && (
             <ReplyPreview
@@ -1333,6 +1347,8 @@ export default function ConversationPage() {
               />
             )}
           </div>
+          </>
+          )}
         </div>
       </div>
 

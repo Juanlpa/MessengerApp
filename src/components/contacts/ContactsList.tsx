@@ -5,6 +5,7 @@ import { useContacts, usePendingRequests, useSentRequests, useDeleteContact } fr
 import { ContactCard } from './ContactCard';
 import { PendingRequests } from './PendingRequests';
 import { SendRequestModal } from './SendRequestModal';
+import { displayUsername } from '@/lib/utils/user-display';
 
 interface ContactsListProps {
   onStartChat?: (userId: string) => void;
@@ -99,7 +100,7 @@ export function ContactsList({ onStartChat }: ContactsListProps) {
               <ContactCard
                 key={c.friendship_id}
                 friendshipId={c.friendship_id}
-                username={c.friend?.username ?? '?'}
+                username={displayUsername(c.friend?.username)}
                 userId={c.friend?.id ?? ''}
                 onDeleted={refetch}
                 onStartChat={onStartChat}
@@ -134,7 +135,7 @@ export function ContactsList({ onStartChat }: ContactsListProps) {
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-[#050505] dark:text-white truncate">
-                    {req.addressee?.username ?? 'Usuario desconocido'}
+                    {req.addressee?.username ? displayUsername(req.addressee.username) : 'Usuario desconocido'}
                   </p>
                   <p className="text-xs text-[#65676b] dark:text-white/40">Pendiente de respuesta</p>
                 </div>

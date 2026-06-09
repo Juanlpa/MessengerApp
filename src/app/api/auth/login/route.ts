@@ -25,6 +25,8 @@ interface UserRow {
   password_hash: string;
   salt: string;
   dh_public_key: string;
+  role: 'user' | 'admin';
+  is_active: boolean;
 }
 
 export async function POST(request: NextRequest) {
@@ -56,7 +58,7 @@ export async function POST(request: NextRequest) {
     const supabase = getSupabaseAdmin();
     const { data } = await supabase
       .from('users')
-      .select('id, email, username, password_hash, salt, dh_public_key')
+      .select('id, email, username, password_hash, salt, dh_public_key, role, is_active')
       .eq('email', email.toLowerCase())
       .single();
 
@@ -88,11 +90,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 
+    // Cuenta desactivada por un admin → bloquear login
+    if (user.is_active === false) {
+      await logSecurityEvent('LOGIN_FAILED', user.id, { ip, userAgent, reason: 'account_disabled' });
+      return NextResponse.json({ error: 'Esta cuenta ha sido desactivada.' }, { status: 403 });
+    }
+
     // Login exitoso — firmar JWT, registrar sesión, log
     const payload = createJWTPayload({
       id: user.id,
       email: user.email,
       username: user.username,
+      role: user.role,
     });
     const token = signJWT(payload);
 
@@ -108,6 +117,7 @@ export async function POST(request: NextRequest) {
         id: user.id,
         email: user.email,
         username: user.username,
+        role: user.role,
       },
     });
   } catch (err) {

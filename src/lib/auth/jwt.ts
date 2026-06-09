@@ -13,6 +13,7 @@ export interface JWTPayload {
   sub: string;        // user ID
   email: string;
   username: string;
+  role?: 'user' | 'admin'; // rol (opcional: tokens viejos no lo traen → 'user')
   iat: number;        // issued at (unix timestamp)
   exp: number;        // expiration (unix timestamp)
 }
@@ -89,12 +90,13 @@ export function verifyJWT(token: string): JWTPayload {
  * Crea un payload JWT para un usuario.
  * Token válido por 24 horas.
  */
-export function createJWTPayload(user: { id: string; email: string; username: string }): JWTPayload {
+export function createJWTPayload(user: { id: string; email: string; username: string; role?: 'user' | 'admin' }): JWTPayload {
   const now = Math.floor(Date.now() / 1000);
   return {
     sub: user.id,
     email: user.email,
     username: user.username,
+    role: user.role ?? 'user',
     iat: now,
     exp: now + 24 * 60 * 60, // 24 horas
   };

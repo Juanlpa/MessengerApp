@@ -14,6 +14,7 @@ import { useContacts, usePendingRequests } from '@/hooks/useContacts';
 import { ContactsList } from '@/components/contacts/ContactsList';
 import { CreateGroupModal } from '@/components/groups/CreateGroupModal';
 import { useThemeStore } from '@/stores/theme-store';
+import { displayUsername } from '@/lib/utils/user-display';
 
 export function Sidebar() {
   const [showNewChat, setShowNewChat] = useState(false);
@@ -145,7 +146,7 @@ export function Sidebar() {
 
   // Render de un item de conversación (amigo-con-chat, grupo, o no-amigo)
   const renderConvItem = (conv: (typeof allConversations)[number]) => {
-    const displayName = conv.isGroup ? (conv.groupName || 'Grupo') : conv.otherUser.username;
+    const displayName = conv.isGroup ? (conv.groupName || 'Grupo') : displayUsername(conv.otherUser.username);
     return (
       <div key={conv.id} className="group/conv relative flex items-center gap-1 mb-1">
         <Link
@@ -216,7 +217,7 @@ export function Sidebar() {
         <OnlineIndicator isOnline={isUserOnline(friend.id)} size="md" />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-[15px] font-medium truncate text-[#050505] dark:text-white">{friend.username}</p>
+        <p className="text-[15px] font-medium truncate text-[#050505] dark:text-white">{displayUsername(friend.username)}</p>
         <p className="text-[#65676b] dark:text-gray-400 text-[13px] truncate">Toca para chatear</p>
       </div>
     </button>
