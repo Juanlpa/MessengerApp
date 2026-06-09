@@ -63,11 +63,23 @@ const nextConfig: NextConfig = {
     optimizePackageImports: ['lucide-react'],
   },
   async headers() {
+    // Origen propio para restringir CORS en assets estáticos (evita el
+    // Access-Control-Allow-Origin: * que añade la CDN). Inofensivo: la app carga
+    // sus chunks en el mismo origen (no usa CORS). Puede que Vercel lo respete.
+    const appOrigin = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/+$/, '');
+
     return [
       {
         source: '/:path*',
         headers: securityHeaders,
       },
+      // Restringir CORS de los assets estáticos a nuestro propio origen
+      ...(appOrigin
+        ? [{
+            source: '/_next/static/:path*',
+            headers: [{ key: 'Access-Control-Allow-Origin', value: appOrigin }],
+          }]
+        : []),
       {
         source: '/sw.js',
         headers: [
