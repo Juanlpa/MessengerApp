@@ -1,24 +1,18 @@
 import type { NextConfig } from "next";
 
-// CSP endurecido en PRODUCCIÓN; flexible en DEV (HMR/túneles necesitan eval y
-// orígenes amplios). En prod se eliminan los comodines y 'unsafe-eval'.
+// CSP endurecido en PRODUCCIÓN; flexible en DEV (HMR necesita 'unsafe-eval').
+// NOTA: script-src/style-src mantienen 'unsafe-inline' porque Next.js/React lo
+// requieren (scripts de hidratación + estilos inline dinámicos). El enfoque con
+// nonce no es viable aquí: las páginas son estáticas y Next no inyecta el nonce,
+// lo que bloquearía los scripts. Documentado como riesgo aceptado en securityinfo.md.
 const isProd = process.env.NODE_ENV === 'production';
-
-// Orígenes de Supabase (REST https + Realtime wss) — se leen del entorno para no
-// hardcodear el proyecto. Si no está disponible al compilar, cae a comodín seguro.
 const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/+$/, '');
 const supabaseWss = supabaseUrl.replace(/^https:/, 'wss:');
 
-// script-src: sin 'unsafe-eval' en producción (no lo necesita el build de Next).
 const scriptSrc = isProd
   ? `'self' 'unsafe-inline'`
   : `'self' 'unsafe-inline' 'unsafe-eval'`;
-
-// img-src: sin comodín https: en producción (imágenes propias = blob/data).
 const imgSrc = isProd ? `'self' data: blob:` : `'self' data: blob: https:`;
-
-// connect-src: en prod solo Supabase (REST+Realtime) y el propio origen.
-// El TURN de WebRTC NO usa fetch/WebSocket, así que no va aquí.
 const connectSrc = isProd && supabaseUrl
   ? `'self' ${supabaseUrl} ${supabaseWss}`
   : `'self' https: wss: ws:`;
@@ -63,23 +57,21 @@ const nextConfig: NextConfig = {
     optimizePackageImports: ['lucide-react'],
   },
   async headers() {
-    // Origen propio para restringir CORS en assets estáticos (evita el
-    // Access-Control-Allow-Origin: * que añade la CDN). Inofensivo: la app carga
-    // sus chunks en el mismo origen (no usa CORS). Puede que Vercel lo respete.
+    // Restringir el CORS a nuestro propio origen en TODAS las respuestas (favicon,
+    // chunks /_next/static, sitemap, etc.) para neutralizar el
+    // `Access-Control-Allow-Origin: *` que añade la CDN de Vercel a los assets
+    // públicos. Es inofensivo: la app carga todo en el mismo origen (no usa CORS),
+    // así que fijar el ACAO al propio dominio no rompe nada y quita el aviso de ZAP.
     const appOrigin = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/+$/, '');
+    const headersForAll = appOrigin
+      ? [...securityHeaders, { key: 'Access-Control-Allow-Origin', value: appOrigin }]
+      : securityHeaders;
 
     return [
       {
         source: '/:path*',
-        headers: securityHeaders,
+        headers: headersForAll,
       },
-      // Restringir CORS de los assets estáticos a nuestro propio origen
-      ...(appOrigin
-        ? [{
-            source: '/_next/static/:path*',
-            headers: [{ key: 'Access-Control-Allow-Origin', value: appOrigin }],
-          }]
-        : []),
       {
         source: '/sw.js',
         headers: [
