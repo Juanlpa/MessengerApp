@@ -112,7 +112,35 @@ The original design contemplated a **three-layer encryption model**:
 
 ---
 
-## 9. Quick Reference
+## 9. HTTP Security Headers & CSP (hallazgos OWASP ZAP)
+
+Configurados en `next.config.ts`:
+`Content-Security-Policy`, `Strict-Transport-Security` (HSTS), `X-Frame-Options: DENY`,
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin`, `X-XSS-Protection`.
+
+### CSP endurecido en producción
+La CSP es **consciente del entorno** (`isProd`): en dev se mantiene flexible (HMR/túneles
+necesitan `unsafe-eval` y orígenes amplios); en **producción se endurece**:
+- **`script-src`:** se elimina `'unsafe-eval'` (el build de Next no lo requiere).
+- **`img-src`:** `'self' data: blob:` — se quita el comodín `https:` (las imágenes son blobs propios).
+- **`connect-src`:** `'self' <supabase-https> <supabase-wss>` — solo el origen de Supabase
+  (REST + Realtime), en vez de los comodines `https:`/`wss:`. El TURN de WebRTC no usa
+  fetch/WebSocket, así que no necesita entrada en `connect-src`.
+
+### Hallazgos aceptados (con justificación)
+- **`script-src`/`style-src 'unsafe-inline'`:** lo requiere **Next.js/React** (scripts de
+  hidratación y estilos inyectados por Tailwind/styled-jsx). El "arreglo" correcto es una CSP
+  basada en **nonces + `strict-dynamic`**, que en App Router es compleja y frágil; se acepta
+  como limitación conocida del framework. Riesgo XSS mitigado además por: no usar
+  `dangerouslySetInnerHTML`, escape por defecto de React, y sanitización de entradas.
+- **`Access-Control-Allow-Origin: *` en `/_next/static/*`:** lo añade **Vercel** a los assets
+  estáticos públicos (JS/CSS inmutables, sin credenciales ni datos sensibles). Es el
+  comportamiento estándar de la CDN y no expone APIs autenticadas (esas van por `/api/*` con
+  JWT y mismo origen). Riesgo bajo, aceptado.
+
+---
+
+## 10. Quick Reference
 
 | What | Algorithm | Where |
 |------|-----------|-------|

@@ -1,12 +1,35 @@
 import type { NextConfig } from "next";
 
+// CSP endurecido en PRODUCCIÓN; flexible en DEV (HMR/túneles necesitan eval y
+// orígenes amplios). En prod se eliminan los comodines y 'unsafe-eval'.
+const isProd = process.env.NODE_ENV === 'production';
+
+// Orígenes de Supabase (REST https + Realtime wss) — se leen del entorno para no
+// hardcodear el proyecto. Si no está disponible al compilar, cae a comodín seguro.
+const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/+$/, '');
+const supabaseWss = supabaseUrl.replace(/^https:/, 'wss:');
+
+// script-src: sin 'unsafe-eval' en producción (no lo necesita el build de Next).
+const scriptSrc = isProd
+  ? `'self' 'unsafe-inline'`
+  : `'self' 'unsafe-inline' 'unsafe-eval'`;
+
+// img-src: sin comodín https: en producción (imágenes propias = blob/data).
+const imgSrc = isProd ? `'self' data: blob:` : `'self' data: blob: https:`;
+
+// connect-src: en prod solo Supabase (REST+Realtime) y el propio origen.
+// El TURN de WebRTC NO usa fetch/WebSocket, así que no va aquí.
+const connectSrc = isProd && supabaseUrl
+  ? `'self' ${supabaseUrl} ${supabaseWss}`
+  : `'self' https: wss: ws:`;
+
 const ContentSecurityPolicy = `
   default-src 'self';
-  script-src 'self' 'unsafe-inline' 'unsafe-eval';
+  script-src ${scriptSrc};
   style-src 'self' 'unsafe-inline';
-  img-src 'self' data: blob: https:;
+  img-src ${imgSrc};
   font-src 'self' data:;
-  connect-src 'self' https: wss:;
+  connect-src ${connectSrc};
   media-src 'self' blob:;
   worker-src 'self' blob:;
   frame-ancestors 'none';
