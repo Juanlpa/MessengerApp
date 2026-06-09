@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePushNotifications } from '@/hooks/usePushNotifications';
 
 interface SessionRow {
   id: string;
@@ -47,6 +48,23 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [revoking, setRevoking] = useState(false);
   const [message, setMessage] = useState('');
+
+  // Notificaciones del sistema (push)
+  const { requestAndSubscribe, isSupported: pushSupported } = usePushNotifications();
+  const [pushPerm, setPushPerm] = useState<NotificationPermission | 'unsupported'>('default');
+  const [pushBusy, setPushBusy] = useState(false);
+  useEffect(() => {
+    setPushPerm(pushSupported ? Notification.permission : 'unsupported');
+  }, [pushSupported]);
+  const enablePush = async () => {
+    setPushBusy(true);
+    try {
+      await requestAndSubscribe();
+      setPushPerm(Notification.permission);
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   const loadSessions = useCallback(async () => {
     if (!token) return;
@@ -132,6 +150,38 @@ export default function SettingsPage() {
             </span>
             <span className="text-gray-400">›</span>
           </Link>
+        </div>
+
+        {/* Notificaciones */}
+        <div className="bg-white dark:bg-gray-900 border border-[#e4e6eb] dark:border-gray-800 rounded-2xl p-6 shadow-sm mb-6">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
+            Notificaciones
+          </h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            Recibe avisos de mensajes nuevos aunque la app esté en segundo plano.
+          </p>
+
+          {pushPerm === 'unsupported' ? (
+            <p className="text-sm text-gray-400">Tu navegador no soporta notificaciones push.</p>
+          ) : pushPerm === 'granted' ? (
+            <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400 font-medium">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg>
+              Notificaciones activadas
+            </div>
+          ) : pushPerm === 'denied' ? (
+            <p className="text-sm text-amber-600 dark:text-amber-400">
+              Notificaciones bloqueadas. Actívalas desde la configuración del navegador (icono 🔒 en la barra de direcciones).
+            </p>
+          ) : (
+            <button
+              onClick={enablePush}
+              disabled={pushBusy}
+              className="flex items-center gap-2 bg-[#0084ff] hover:bg-[#0073e6] text-white rounded-lg px-4 py-2.5 text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+              {pushBusy ? 'Activando...' : 'Activar notificaciones'}
+            </button>
+          )}
         </div>
 
         {/* Dispositivos conectados */}

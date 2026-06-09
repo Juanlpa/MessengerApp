@@ -17,6 +17,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { supabase } from '@/lib/supabase/client';
+import { useUnreadStore } from '@/stores/unread-store';
 
 export interface Conversation {
   id: string;
@@ -131,6 +132,12 @@ export function useConversations(showArchived = false) {
               headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
               body: JSON.stringify({ messageIds: [msg.id], status: 'delivered' }),
             }).catch(() => {});
+
+            // Badge in-app: contar como no leído si NO estás viendo ese chat
+            const activePath = typeof window !== 'undefined' ? window.location.pathname : '';
+            if (activePath !== `/chat/${msg.conversation_id}`) {
+              useUnreadStore.getState().increment(msg.conversation_id);
+            }
           }
         })
       .subscribe();

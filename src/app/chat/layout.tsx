@@ -7,6 +7,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { useGlobalCallListener } from '@/hooks/useGlobalCallListener';
 import { IncomingCallBanner } from '@/components/chat/IncomingCallBanner';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
+import { NotificationPrompt } from '@/components/chat/NotificationPrompt';
 
 function GlobalCallListenerWrapper({ userId, children }: { userId: string; children: React.ReactNode }) {
   useGlobalCallListener(userId);
@@ -86,6 +87,7 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
     <GlobalCallListenerWrapper userId={user.id}>
       <div className="h-screen overflow-hidden bg-white dark:bg-gray-900 flex text-[#050505] dark:text-white">
         <IncomingCallBanner />
+        <NotificationPrompt />
         <div className={`${isLanding ? 'block w-full md:w-[360px]' : 'hidden md:block w-[360px]'} h-full flex-shrink-0`}>
           <Sidebar />
         </div>

@@ -28,6 +28,7 @@ import { useGroupDetail } from '@/hooks/useGroups';
 import { GroupSettings } from '@/components/groups/GroupSettings';
 import { refreshConversations } from '@/hooks/useConversations';
 import { displayUsername, isDeletedUser } from '@/lib/utils/user-display';
+import { useUnreadStore } from '@/stores/unread-store';
 
 // Componentes de adjuntos y voz (develop)
 import { AttachmentButton } from '@/components/chat/AttachmentButton';
@@ -86,6 +87,11 @@ export default function ConversationPage() {
   const router = useRouter();
   const conversationId = params.conversationId as string;
   const shouldAutoJoinGroup = searchParams?.get('joinGroupCall') === '1';
+
+  // Al abrir/cambiar de chat, limpiar su contador de no leídos (badge in-app)
+  useEffect(() => {
+    if (conversationId) useUnreadStore.getState().clear(conversationId);
+  }, [conversationId]);
   const user = useAuthStore(s => s.user);
   const token = useAuthStore(s => s.token);
   const cachedStorageKey = useAuthStore(s => s.storageKey);

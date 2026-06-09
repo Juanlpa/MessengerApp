@@ -15,6 +15,7 @@ import { ContactsList } from '@/components/contacts/ContactsList';
 import { CreateGroupModal } from '@/components/groups/CreateGroupModal';
 import { useThemeStore } from '@/stores/theme-store';
 import { displayUsername } from '@/lib/utils/user-display';
+import { useUnreadStore } from '@/stores/unread-store';
 
 export function Sidebar() {
   const [showNewChat, setShowNewChat] = useState(false);
@@ -30,6 +31,7 @@ export function Sidebar() {
   const { contacts } = useContacts();
   const { requests } = usePendingRequests();
   const pendingCount = requests.length;
+  const unreadCounts = useUnreadStore(s => s.counts);
 
   const user = useAuthStore(s => s.user);
   const token = useAuthStore(s => s.token);
@@ -147,6 +149,7 @@ export function Sidebar() {
   // Render de un item de conversación (amigo-con-chat, grupo, o no-amigo)
   const renderConvItem = (conv: (typeof allConversations)[number]) => {
     const displayName = conv.isGroup ? (conv.groupName || 'Grupo') : displayUsername(conv.otherUser.username);
+    const unread = unreadCounts[conv.id] ?? 0;
     return (
       <div key={conv.id} className="group/conv relative flex items-center gap-1 mb-1">
         <Link
@@ -162,6 +165,11 @@ export function Sidebar() {
               {displayName[0]?.toUpperCase() || '?'}
             </div>
             {!conv.isGroup && <OnlineIndicator isOnline={isUserOnline(conv.otherUser.id)} size="md" />}
+            {unread > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#0084ff] text-white text-[11px] font-bold flex items-center justify-center border-2 border-white dark:border-gray-900">
+                {unread > 99 ? '99+' : unread}
+              </span>
+            )}
           </div>
           <div className="flex-1 min-w-0">
             <p className={`text-[15px] font-medium truncate ${
